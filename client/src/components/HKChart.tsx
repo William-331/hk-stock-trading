@@ -97,10 +97,15 @@ export default function HKChart({ code }: Props) {
         priceLineVisible: false,
       });
       const lineData: LineData[] = [];
+      const now = new Date();
+      const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       for (const p of rawData) {
         if (!p.time || p.price <= 0) continue;
-        // Time format "0930" -> keep as string
-        lineData.push({ time: p.time as Time, value: p.price });
+        // "0930" → unix timestamp so chart doesn't parse it as year 930
+        const hh = parseInt((p.time as string).slice(0, 2), 10);
+        const mm = parseInt((p.time as string).slice(2), 10);
+        const ts = Math.floor((base.getTime() + (hh * 3600 + mm * 60) * 1000) / 1000) as Time;
+        lineData.push({ time: ts, value: p.price });
       }
       lineSeries.setData(lineData);
     } else {

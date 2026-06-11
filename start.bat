@@ -1,21 +1,25 @@
 @echo off
 chcp 65001 >nul
 echo ========================================
-echo   02110 模拟交易系统 - 一键启动
+echo   港股模拟交易系统 - 一键启动
 echo ========================================
 echo.
-echo 后端: http://localhost:3001
-echo 前端: http://localhost:5173
+echo 访问地址: http://localhost:3001
 echo.
-echo 关闭此窗口即可停止所有服务
+echo 关闭此窗口即可停止服务
 echo ========================================
 echo.
 
 cd /d "%~dp0"
 
-echo 正在启动服务，稍后会自动打开浏览器...
-echo.
+echo [1/2] 构建前端...
+cd client
+call npm run build
+cd ..
 
-npm run dev
+echo.
+echo [2/2] 启动服务器...
+cd server
+npx tsx src/index.ts
 
 pause

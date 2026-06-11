@@ -258,7 +258,7 @@ export default function HKDetail() {
                 </div>
                 {trades.map((t, i) => (
                   <div key={i} className="flex px-3 py-1.5 border-b border-gray-50 tabular-nums">
-                    <span className="w-16 text-gray-500">{t.time}</span>
+                    <span className="w-16 text-gray-500">{t.time.slice(11, 16)}</span>
                     <span className={`flex-1 text-right font-medium ${t.price >= (quote.prevClose || t.price) ? 'text-[#e15241]' : 'text-[#47b262]'}`}>
                       {fmt(t.price)}
                     </span>

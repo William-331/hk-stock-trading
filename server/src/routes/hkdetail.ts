@@ -166,10 +166,20 @@ router.get('/intraday/:code', async (req, res) => {
 
     const raw = data.data[`hk${code}`].data.data as string[];
     // Each entry: "HHMM price volume amount"
+    // Build date prefix for intraday times
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const datePrefix = `${yyyy}-${mm}-${dd}`;
+
     const points = raw.map((s: string) => {
       const [time, price, vol, amt] = s.split(' ');
+      // Convert "0930" → "2025-06-11T09:30:00" so chart can parse the date
+      const hh = time.slice(0, 2);
+      const min = time.slice(2);
       return {
-        time, // "0930"
+        time: `${datePrefix}T${hh}:${min}:00`,
         price: parseFloat(price) || 0,
         volume: parseInt(vol) || 0,
         amount: parseFloat(amt) || 0,

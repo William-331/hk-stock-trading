@@ -2,22 +2,28 @@
 cd /d "%~dp0"
 
 echo ========================================
-echo   港股模拟交易系统
+echo   HK Stock Trading System
 echo ========================================
 echo.
 
-echo [*] 释放 3001 端口...
-powershell -Command "Stop-Process -Id (Get-NetTCPConnection -LocalPort 3001 -EA 0).OwningProcess -Force -EA 0" 2>nul
+echo [*] Free port 3001...
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3001 " 2^>nul') do taskkill /f /pid %%a >nul 2>&1
 echo.
 
-echo [1/2] 构建前端...
+echo [1/2] Build frontend...
 cd client
 call npm run build
-if errorlevel 1 ( echo 构建失败 && cd .. && pause && exit )
+if errorlevel 1 (
+    echo Build failed
+    cd ..
+    pause
+    exit
+)
 cd ..
 
-echo [2/2] 启动服务器...
-echo 访问: http://localhost:3001
+echo [2/2] Start server...
+echo URL: http://localhost:3001
+echo HK:  http://localhost:3001/hk
 echo.
 
 cd server

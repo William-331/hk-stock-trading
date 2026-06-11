@@ -39,9 +39,10 @@ export default function Login({ onLogin }: Props) {
   return (
     <div className="min-h-screen bg-[#f0f2f5] flex flex-col items-center justify-center px-4">
       {/* Logo 区 */}
-      <div className="mb-8 text-center">
+      <div className="mb-8 text-center relative">
+        <span className="absolute -top-7 -left-2 text-sm text-blue-600 font-bold whitespace-nowrap">天诚控股02110.HK</span>
         <div className="text-5xl mb-3">📈</div>
-        <h1 className="text-xl font-bold text-gray-800">模拟交易系统</h1>
+        <h1 className="text-xl font-bold text-gray-800">内盘交易系统</h1>
       </div>
 
       {/* 卡片 */}

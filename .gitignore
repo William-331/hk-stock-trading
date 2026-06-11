@@ -8,3 +8,5 @@ data/backups/
 .DS_Store
 Thumbs.db
 cloudflared*.exe
+config.yml
+startup.log

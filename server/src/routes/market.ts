@@ -5,71 +5,115 @@ import http from 'http';
 const router = Router();
 
 // --------------- http ---------------
-function httpGet(url: string): Promise<string> {
+function httpGetBuffer(url: string, referer: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('https') ? https : http;
     const req = mod.get(
       url,
-      { headers: { Referer: 'https://quote.eastmoney.com', 'User-Agent': 'Mozilla/5.0' } },
+      { headers: { Referer: referer, 'User-Agent': 'Mozilla/5.0' } },
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => resolve(Buffer.concat(chunks).toString()));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
       },
     );
     req.on('error', reject);
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
+    req.setTimeout(8000, () => { req.destroy(); reject(new Error('timeout')); });
   });
+}
+
+// GBK-aware fetch for Sina
+async function httpGetGBK(url: string, referer: string): Promise<string> {
+  const buf = await httpGetBuffer(url, referer);
+  try { return new TextDecoder('gbk').decode(buf); } catch { return buf.toString(); }
+}
+
+// UTF-8 fetch for EastMoney
+async function httpGetJSON(url: string, referer: string): Promise<any> {
+  const buf = await httpGetBuffer(url, referer);
+  return JSON.parse(buf.toString('utf8'));
 }
 
 // --------------- cache ---------------
 const cache = new Map<string, { data: any; ts: number }>();
 const CACHE_MS = 4000;
 
-// --------------- single-stock fetch ---------------
+// --------------- stocks ---------------
 const CODES = [
   '00700', '09988', '00388', '00941', '00005',
   '01810', '02318', '01299', '03690', '00981',
   '02269', '01024', '01347', '02015', '09618',
 ];
 
-const FIELDS = 'f43,f44,f45,f46,f47,f48,f50,f57,f58,f116,f117,f162,f167,f168,f169,f170,f171';
+// --------------- Sina (reliable, basic fields) ---------------
+async function fetchSina(): Promise<any[]> {
+  const text = await httpGetGBK(
+    `https://hq.sinajs.cn/list=${CODES.map((c) => `hk${c}`).join(',')}`,
+    'https://finance.sina.com.cn',
+  );
+  const results: any[] = [];
+  for (const code of CODES) {
+    const re = new RegExp(`hk${code}[^"]*"([^"]*)"`, 'g');
+    const m = re.exec(text);
+    if (!m) continue;
+    const f = m[1].split(',');
+    if (f.length < 12) continue;
 
-async function fetchOne(code: string): Promise<any | null> {
+    const p = (i: number) => parseFloat(f[i]) || 0;
+    const price = p(6);
+    const open  = p(2);
+    const high  = p(4);
+    const low   = p(5);
+    const ampl  = open > 0 ? ((high - low) / open * 100) : 0;
+
+    results.push({
+      code,
+      name:        f[1] || f[0] || code,
+      price,
+      open,
+      high,
+      low,
+      change:      p(7),
+      changePct:   p(8),
+      chgSpeed:    0,   // Sina 不提供
+      turnover:    0,
+      volRatio:    0,
+      amplitude:   Math.round(ampl * 100) / 100,
+      volume:      parseInt(f[11]) || 0,
+      amount:      p(12) || 0,
+      floatCap:    0,
+      pe:          0,
+    });
+  }
+  return results;
+}
+
+// --------------- EastMoney (enrich with extra fields) ---------------
+async function enrichEastMoney(results: any[]): Promise<void> {
   try {
-    const raw = await httpGet(
-      `https://push2.eastmoney.com/api/qt/stock/get?secid=116.${code}&fields=${FIELDS}`,
+    const secids = CODES.map((c) => `116.${c}`).join(',');
+    const fields = 'f57,f168,f167,f50,f48,f117,f162,f171';
+    const json = await httpGetJSON(
+      `https://push2.eastmoney.com/api/qt/stock/get?secids=${secids}&fields=${fields}`,
+      'https://quote.eastmoney.com',
     );
-    const json = JSON.parse(raw);
-    const d = json?.data;
-    if (!d || !d.f57) return null;
+    const diff = json?.data?.diff;
+    if (!Array.isArray(diff)) return;
 
-    const price   = (d.f43 || 0) / 1000;
-    const open    = (d.f46 || 0) / 1000;
-    const high    = (d.f44 || 0) / 1000;
-    const low     = (d.f45 || 0) / 1000;
-    const ampl    = open > 0 ? ((high - low) / open * 100) : 0;
-
-    return {
-      code:        d.f57,                       // 代码
-      name:        d.f58,                       // 名称
-      price,                                    // 最新价 (HKD)
-      open,                                     // 今开
-      high,                                     // 最高
-      low,                                      // 最低
-      change:      (d.f169 || 0) / 1000,        // 涨跌额
-      changePct:   (d.f170 || 0) / 100,         // 涨跌幅(%) — raw / 100
-      chgSpeed:    (d.f168 || 0) / 100,         // 涨速(%)  — raw / 100
-      turnover:    (d.f167 || 0) / 100,         // 换手率(%) — raw / 100
-      volRatio:    (d.f50  || 0) / 100,         // 量比      — raw / 100
-      amplitude:   Math.round(ampl * 100) / 100,// 振幅(%)
-      volume:      d.f47 || 0,                  // 成交量(股)
-      amount:      d.f48 || 0,                  // 成交额(HKD)
-      floatCap:    d.f117 || 0,                 // 流通市值(HKD)
-      pe:          d.f162 || 0,                 // 市盈率
-    };
+    const map = new Map(diff.map((d: any) => [d.f57, d]));
+    for (const r of results) {
+      const d = map.get(r.code);
+      if (!d) continue;
+      if (d.f168) r.chgSpeed  = (d.f168 || 0) / 100;
+      if (d.f167) r.turnover  = (d.f167 || 0) / 100;
+      if (d.f50)  r.volRatio  = (d.f50  || 0) / 100;
+      if (d.f48)  r.amount    = d.f48 || r.amount;
+      if (d.f117) r.floatCap  = d.f117 || 0;
+      if (d.f162) r.pe        = d.f162 || 0;
+      if (d.f171) r.floatShares = d.f171 || 0;
+    }
   } catch {
-    return null;
+    // EastMoney failed → keep Sina data as-is
   }
 }
 
@@ -79,18 +123,22 @@ router.get('/hklist', async (_req, res) => {
   if (cached && Date.now() - cached.ts < CACHE_MS) return res.json(cached.data);
 
   try {
-    const results = (await Promise.all(CODES.map(fetchOne))).filter(Boolean);
-    if (results.length === 0) {
-      if (cached) return res.json(cached.data);
-      return res.json([]);
+    const results = await fetchSina();
+    if (results.length > 0) {
+      results.sort((a: any, b: any) => a.code.localeCompare(b.code));
+      // Try EastMoney enrichment (non-blocking, fast timeout handled inside)
+      enrichEastMoney(results).catch(() => {});
+
+      cache.set('hklist', { data: results, ts: Date.now() });
+      return res.json(results);
     }
-    results.sort((a: any, b: any) => a.code.localeCompare(b.code));
-    cache.set('hklist', { data: results, ts: Date.now() });
-    res.json(results);
   } catch (err: any) {
     if (cached) return res.json(cached.data);
-    res.status(502).json({ error: '行情获取失败', detail: err.message });
+    return res.status(502).json({ error: '行情获取失败', detail: err.message });
   }
+
+  if (cached) return res.json(cached.data);
+  res.json([]);
 });
 
 export default router;

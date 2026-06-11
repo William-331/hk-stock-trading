@@ -7,3 +7,4 @@ data/backups/
 .env
 .DS_Store
 Thumbs.db
+cloudflared*.exe

@@ -38,6 +38,30 @@ async function httpGetJSON(url: string, referer: string): Promise<any> {
 const cache = new Map<string, { data: any; ts: number }>();
 const CACHE_MS = 4000;
 
+// --------------- 涨速 (5-min rolling) ---------------
+const priceSnapshots = new Map<string, { price: number; time: number }[]>();
+
+function calcChgSpeed(code: string, price: number): number {
+  let snap = priceSnapshots.get(code);
+  if (!snap) { snap = []; priceSnapshots.set(code, snap); }
+
+  const now = Date.now();
+  snap.push({ price, time: now });
+
+  // Keep last 5 min
+  const cutoff = now - 5 * 60_000;
+  while (snap.length && snap[0].time < cutoff) snap.shift();
+
+  // Need at least 60s of history
+  if (snap.length < 2) return 0;
+  const oldest = snap[0];
+  const dt = (now - oldest.time) / 1000;
+  if (dt < 60 || oldest.price <= 0) return 0;
+
+  // Actual change over available window (≤5min)
+  return Math.round((price - oldest.price) / oldest.price * 100 * 100) / 100;
+}
+
 // --------------- stocks ---------------
 const CODES = [
   '00700', '09988', '00388', '00941', '00005',
@@ -75,7 +99,7 @@ async function fetchSina(): Promise<any[]> {
       low,
       change:      p(7),
       changePct:   p(8),
-      chgSpeed:    0,   // Sina 不提供
+      chgSpeed:    calcChgSpeed(code, price),
       turnover:    0,
       volRatio:    0,
       amplitude:   Math.round(ampl * 100) / 100,

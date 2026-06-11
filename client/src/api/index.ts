@@ -86,4 +86,11 @@ export const updateSettings = (data: any) => api.put('/admin/settings', data);
 // HK Market
 export const getHKList = () => api.get('/market/hklist');
 
+// HK Detail
+export const getHKQuote = (code: string) => api.get(`/hk/quote/${code}`);
+export const getHKKline = (code: string, period: 'day' | 'week' | 'month' = 'day') =>
+  api.get(`/hk/kline/${code}`, { params: { period } });
+export const getHKIntraday = (code: string) => api.get(`/hk/intraday/${code}`);
+export const getHKNews = () => api.get('/hk/news');
+
 export default api;

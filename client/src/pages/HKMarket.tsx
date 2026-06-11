@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getHKList } from '../api';
 
 interface StockItem {
@@ -48,6 +49,7 @@ function fmtPE(v: number): string {
 }
 
 export default function HKMarket() {
+  const navigate = useNavigate();
   const [stocks, setStocks] = useState<StockItem[]>([]);
   const [category, setCategory] = useState('all');
   const [loading, setLoading] = useState(true);
@@ -93,7 +95,7 @@ export default function HKMarket() {
     const rowBg = s.changePct >= 0 ? 'bg-red-50/30' : 'bg-green-50/30';
 
     return (
-      <div key={s.code} className={`flex items-center px-3 py-2.5 hover:bg-gray-50/60 transition border-b border-gray-50 ${rowBg}`}>
+      <div key={s.code} onClick={() => navigate(`/hk/${s.code}`)} className={`flex items-center px-3 py-2.5 hover:bg-gray-50/60 transition border-b border-gray-50 cursor-pointer ${rowBg}`}>
         {/* 股票名 (sticky-ish via min-width) */}
         <div className="w-[110px] shrink-0">
           <p className="text-sm font-medium text-gray-800 truncate">{s.name}</p>

@@ -12,6 +12,7 @@ import auditRoutes from './routes/audit';
 import accountRoutes from './routes/account';
 import exportRoutes, { autoBackup } from './routes/export';
 import marketRoutes from './routes/market';
+import hkDetailRoutes from './routes/hkdetail';
 import { requireAuth, requireAdmin } from './middleware/auth';
 
 const app = express();
@@ -32,6 +33,7 @@ app.use('/api/audit', auditRoutes);
 app.use('/api/account', accountRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/market', marketRoutes);
+app.use('/api/hk', hkDetailRoutes);
 
 
 // 获取当前用户信息

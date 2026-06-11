@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { createChart } from 'lightweight-charts';
+import { createChart, ColorType, UTCTimestamp } from 'lightweight-charts';
 
 interface KlineData {
   time_slot: string;
@@ -21,7 +21,7 @@ export default function KlineChart({ data }: { data: KlineData[] }) {
       width: containerRef.current.clientWidth,
       height: 360,
       layout: {
-        background: '#ffffff',
+        background: { type: ColorType.Solid, color: '#ffffff' },
         textColor: '#666666',
       },
       grid: {
@@ -50,7 +50,7 @@ export default function KlineChart({ data }: { data: KlineData[] }) {
     const chartData = data
       .filter(d => d.open && d.close)
       .map(d => ({
-        time: Math.floor(new Date(d.time_slot.replace(' ', 'T') + ':00').getTime() / 1000),
+        time: Math.floor(new Date(d.time_slot.replace(' ', 'T') + ':00').getTime() / 1000) as UTCTimestamp,
         open: d.open,
         high: d.high,
         low: d.low,

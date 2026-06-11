@@ -6,6 +6,7 @@ import OrderForm from './pages/OrderForm';
 import MyOrders from './pages/MyOrders';
 import MyPositions from './pages/MyPositions';
 import HKMarket from './pages/HKMarket';
+import HKDetail from './pages/HKDetail';
 import AuditManage from './pages/admin/AuditManage';
 import PriceManage from './pages/admin/PriceManage';
 import TradeRecords from './pages/admin/TradeRecords';
@@ -41,6 +42,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login onLogin={setUser} />} />
         <Route path="/" element={<ProtectedRoute><Layout><Market /></Layout></ProtectedRoute>} />
+        <Route path="/hk/:code" element={<ProtectedRoute><Layout><HKDetail /></Layout></ProtectedRoute>} />
         <Route path="/hk" element={<ProtectedRoute><Layout><HKMarket /></Layout></ProtectedRoute>} />
         <Route path="/order/:type" element={<ProtectedRoute><Layout><OrderForm /></Layout></ProtectedRoute>} />
         <Route path="/my-orders" element={<ProtectedRoute><Layout><MyOrders /></Layout></ProtectedRoute>} />

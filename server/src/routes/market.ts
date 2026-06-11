@@ -1,38 +1,7 @@
 import { Router } from 'express';
-import https from 'https';
-import http from 'http';
+import { httpGetGBK } from '../utils/http';
 
 const router = Router();
-
-// --------------- http ---------------
-function httpGetBuffer(url: string, referer: string): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const mod = url.startsWith('https') ? https : http;
-    const req = mod.get(
-      url,
-      { headers: { Referer: referer, 'User-Agent': 'Mozilla/5.0' } },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => resolve(Buffer.concat(chunks)));
-      },
-    );
-    req.on('error', reject);
-    req.setTimeout(8000, () => { req.destroy(); reject(new Error('timeout')); });
-  });
-}
-
-// GBK-aware fetch for Sina
-async function httpGetGBK(url: string, referer: string): Promise<string> {
-  const buf = await httpGetBuffer(url, referer);
-  try { return new TextDecoder('gbk').decode(buf); } catch { return buf.toString(); }
-}
-
-// UTF-8 fetch for EastMoney
-async function httpGetJSON(url: string, referer: string): Promise<any> {
-  const buf = await httpGetBuffer(url, referer);
-  return JSON.parse(buf.toString('utf8'));
-}
 
 // --------------- cache ---------------
 const cache = new Map<string, { data: any; ts: number }>();

@@ -88,32 +88,31 @@ async function fetchSina(): Promise<any[]> {
   return results;
 }
 
-// --------------- EastMoney (enrich with extra fields) ---------------
-async function enrichEastMoney(results: any[]): Promise<void> {
+// --------------- Tencent enrichment ---------------
+// Fields: f37=成交额 f39=换手率% f43=振幅% f50=量比 f64=市盈率 f69=流通股本
+async function enrichTencent(results: any[]): Promise<void> {
   try {
-    const secids = CODES.map((c) => `116.${c}`).join(',');
-    const fields = 'f57,f168,f167,f50,f48,f117,f162,f171';
-    const json = await httpGetJSON(
-      `https://push2.eastmoney.com/api/qt/stock/get?secids=${secids}&fields=${fields}`,
-      'https://quote.eastmoney.com',
+    const text = await httpGetGBK(
+      `https://qt.gtimg.cn/q=${CODES.map((c) => `hk${c}`).join(',')}`,
+      'https://gu.qq.com',
     );
-    const diff = json?.data?.diff;
-    if (!Array.isArray(diff)) return;
-
-    const map = new Map(diff.map((d: any) => [d.f57, d]));
     for (const r of results) {
-      const d = map.get(r.code);
-      if (!d) continue;
-      if (d.f168) r.chgSpeed  = (d.f168 || 0) / 100;
-      if (d.f167) r.turnover  = (d.f167 || 0) / 100;
-      if (d.f50)  r.volRatio  = (d.f50  || 0) / 100;
-      if (d.f48)  r.amount    = d.f48 || r.amount;
-      if (d.f117) r.floatCap  = d.f117 || 0;
-      if (d.f162) r.pe        = d.f162 || 0;
-      if (d.f171) r.floatShares = d.f171 || 0;
+      const re = new RegExp(`hk${r.code}[^"]*"([^"]*)"`, 'g');
+      const m = re.exec(text);
+      if (!m) continue;
+      const f = m[1].split('~');
+      if (f.length < 70) continue;
+      const p = (i: number) => parseFloat(f[i]) || 0;
+      const floatShares = p(69);
+      if (p(39) > 0)  r.turnover  = p(39);
+      if (p(50) > 0)  r.volRatio  = p(50);
+      if (p(43) > 0)  r.amplitude = p(43);
+      if (p(37) > 0)  r.amount    = p(37);
+      if (p(64))      r.pe        = p(64);
+      if (floatShares > 0) r.floatCap = Math.round(r.price * floatShares);
     }
   } catch {
-    // EastMoney failed → keep Sina data as-is
+    // Tencent failed → keep Sina data as-is
   }
 }
 
@@ -126,9 +125,7 @@ router.get('/hklist', async (_req, res) => {
     const results = await fetchSina();
     if (results.length > 0) {
       results.sort((a: any, b: any) => a.code.localeCompare(b.code));
-      // Try EastMoney enrichment (non-blocking, fast timeout handled inside)
-      enrichEastMoney(results).catch(() => {});
-
+      await enrichTencent(results);
       cache.set('hklist', { data: results, ts: Date.now() });
       return res.json(results);
     }

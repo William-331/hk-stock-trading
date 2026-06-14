@@ -1,0 +1,17 @@
+{
+  "name": "stock-trading",
+  "version": "1.0.0",
+  "description": "港股模拟交易系统 — 支持实时行情、模拟下单、审核、K线、交易记录备份",
+  "scripts": {
+    "install:all": "cd server && npm install && cd ../client && npm install",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
+    "build": "cd client && npm run build",
+    "start:prod": "cd server && npm start",
+    "start": "npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

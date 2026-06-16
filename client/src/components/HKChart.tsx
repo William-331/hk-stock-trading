@@ -98,13 +98,12 @@ export default function HKChart({ code }: Props) {
       });
       const lineData: LineData[] = [];
       const now = new Date();
-      const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       for (const p of rawData) {
         if (!p.time || p.price <= 0) continue;
-        // "0930" → unix timestamp so chart doesn't parse it as year 930
+        // "0930" → unix timestamp using Date.UTC so chart displays correct local time
         const hh = parseInt((p.time as string).slice(0, 2), 10);
         const mm = parseInt((p.time as string).slice(2), 10);
-        const ts = Math.floor((base.getTime() + (hh * 3600 + mm * 60) * 1000) / 1000) as Time;
+        const ts = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm) / 1000) as Time;
         lineData.push({ time: ts, value: p.price });
       }
       lineSeries.setData(lineData);

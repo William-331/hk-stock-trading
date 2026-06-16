@@ -32,7 +32,7 @@ export default function PriceManage() {
     try {
       const o = Number(price);
       await addPrice({
-        time_slot: timeSlot,
+        time_slot: timeSlot.replace('T', ' '),
         open: o,
         high: Math.round(o * 1.005 * 100) / 100,
         low: Math.round(o * 0.995 * 100) / 100,
@@ -60,7 +60,7 @@ export default function PriceManage() {
 
     for (let i = 0; i < count; i++) {
       const t = new Date(startDate.getTime() + i * 10 * 60 * 1000);
-      const slot = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}${String(t.getDate()).padStart(2,'0')} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`;
+      const slot = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`;
 
       const change = (Math.random() - 0.48) * vol;
       const p = Math.max(0.01, base + change);
@@ -118,13 +118,29 @@ export default function PriceManage() {
 
       {tab === 'single' ? (
         <form onSubmit={handleAdd} className="space-y-3">
-          <input
-            type="text"
-            value={timeSlot}
-            onChange={e => setTimeSlot(e.target.value)}
-            placeholder="时间（如: 2026-06-10 14:30）"
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
+          <div className="flex gap-2">
+            <input
+              type="datetime-local"
+              value={timeSlot}
+              onChange={e => setTimeSlot(e.target.value)}
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const now = new Date();
+                const tz = now.getFullYear() + '-' +
+                  String(now.getMonth()+1).padStart(2,'0') + '-' +
+                  String(now.getDate()).padStart(2,'0') + 'T' +
+                  String(now.getHours()).padStart(2,'0') + ':' +
+                  String(now.getMinutes()).padStart(2,'0');
+                setTimeSlot(tz);
+              }}
+              className="px-3 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm hover:bg-gray-200 shrink-0"
+            >
+              现在
+            </button>
+          </div>
           <input
             type="number"
             step="0.01"

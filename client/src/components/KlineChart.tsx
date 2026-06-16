@@ -51,16 +51,27 @@ export default function KlineChart({ data }: Props) {
 
     const isIntraday = period === 'intraday';
 
-    // Sort & filter first
+    // Sort & filter — build valid timestamps first
     const sorted = data
-      .filter(d => d.open > 0 && d.close > 0)
-      .map(d => ({
-        ...d,
-        _ts: new Date(d.time_slot.replace(' ', 'T') + ':00').getTime(),
-      }))
+      .filter(d => d.open > 0 && d.close > 0 && d.time_slot)
+      .map(d => {
+        const parts = d.time_slot.split(' ');
+        if (parts.length < 2) return { ...d, _ts: NaN };
+        const [dp, tp] = parts;
+        const [y, m, day] = dp.split('-').map(Number);
+        const [h, min] = tp.split(':').map(Number);
+        // time_slot is Beijing time; lightweight-charts displays timestamps as-is
+        // so we use Date.UTC without TZ offset so the chart shows the correct time
+        const ts = Date.UTC(y, m - 1, day, h, min);
+        return { ...d, _ts: ts };
+      })
+      .filter(d => !isNaN(d._ts) && d._ts > 0)
       .sort((a, b) => a._ts - b._ts);
 
-    const toTimestamp = (ts: number) => Math.floor(ts / 1000) as UTCTimestamp;
+    const toTimestamp = (ts: number): UTCTimestamp => {
+      const v = Math.trunc(ts / 1000);
+      return v as UTCTimestamp;
+    };
 
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,

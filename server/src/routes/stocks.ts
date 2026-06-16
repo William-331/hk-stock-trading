@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db, { logOperation } from '../db';
+import { requireAuth } from '../middleware/auth';
 
 const router = Router();
 
@@ -65,7 +66,7 @@ router.get('/latest', (_req: Request, res: Response) => {
 });
 
 // 后台：添加价格点（每10分钟）
-router.post('/add', (req: Request, res: Response) => {
+router.post('/add', requireAuth, (req: Request, res: Response) => {
   const { time_slot, open, high, low, close, volume } = req.body;
   if (!time_slot || !open) {
     return res.status(400).json({ error: '时间和价格必填' });
@@ -81,22 +82,22 @@ router.post('/add', (req: Request, res: Response) => {
     db.prepare(
       'INSERT OR REPLACE INTO stock_prices (time_slot, open, high, low, close, volume, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(time_slot, o, h, l, c, v, req.user?.id || 1);
+
+    logOperation(
+      req.user?.id || 0,
+      req.user?.username || '',
+      'add_price',
+      `添加价格点: ${time_slot} O:${o} H:${h} L:${l} C:${c}`
+    );
+
+    res.json({ message: '价格点已添加' });
   } catch (e: any) {
     return res.status(400).json({ error: e.message });
   }
-
-  logOperation(
-    req.user?.id || 0,
-    req.user?.username || '',
-    'add_price',
-    `添加价格点: ${time_slot} O:${o} H:${h} L:${l} C:${c}`
-  );
-
-  res.json({ message: '价格点已添加' });
 });
 
 // 后台：批量添加价格点
-router.post('/batch', (req: Request, res: Response) => {
+router.post('/batch', requireAuth, (req: Request, res: Response) => {
   const { prices } = req.body;
   if (!prices || !Array.isArray(prices) || prices.length === 0) {
     return res.status(400).json({ error: '价格数组必填' });
@@ -106,39 +107,45 @@ router.post('/batch', (req: Request, res: Response) => {
     'INSERT OR REPLACE INTO stock_prices (time_slot, open, high, low, close, volume, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
 
-  const tx = db.transaction(() => {
-    for (const p of prices) {
-      const { time_slot, open, high, low, close, volume } = p;
-      insert.run(
-        time_slot,
-        open,
-        high || open,
-        low || open,
-        close || open,
-        volume || 1000,
-        req.user?.id || 1
-      );
-    }
-  });
-  tx();
+  try {
+    const tx = db.transaction(() => {
+      for (const p of prices) {
+        const { time_slot, open, high, low, close, volume } = p;
+        insert.run(
+          time_slot,
+          open,
+          high || open,
+          low || open,
+          close || open,
+          volume || 1000,
+          req.user?.id || 1
+        );
+      }
+    });
+    tx();
 
-  logOperation(
-    req.user?.id || 0,
-    req.user?.username || '',
-    'batch_add_price',
-    `批量添加 ${prices.length} 个价格点`
-  );
+    logOperation(
+      req.user?.id || 0,
+      req.user?.username || '',
+      'batch_add_price',
+      `批量添加 ${prices.length} 个价格点`
+    );
 
-  res.json({ message: `已添加 ${prices.length} 个价格点` });
+    res.json({ message: `已添加 ${prices.length} 个价格点` });
+  } catch (e: any) {
+    return res.status(400).json({ error: e.message });
+  }
 });
 
 // 后台：删除价格点
-router.delete('/:id', (req: Request, res: Response) => {
+router.delete('/:id', requireAuth, (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM stock_prices WHERE id = ?').get(req.params.id) as any;
   if (!row) return res.status(404).json({ error: '不存在' });
 
   db.prepare('DELETE FROM stock_prices WHERE id = ?').run(req.params.id);
-  logOperation(req.user?.id || 0, req.user?.username || '', 'delete_price', `删除价格点: ${row.time_slot}`);
+  try {
+    logOperation(req.user?.id || 0, req.user?.username || '', 'delete_price', `删除价格点: ${row.time_slot}`);
+  } catch {}
   res.json({ message: '已删除' });
 });
 

@@ -37,6 +37,15 @@ export const getLatestPrice = () => api.get('/stocks/latest');
 export const addPrice = (data: any) => api.post('/stocks/add', data);
 export const batchAddPrice = (prices: any[]) => api.post('/stocks/batch', { prices });
 
+// Price Plan
+export const getPricePlan = (params?: any) => api.get('/price-plan', { params });
+export const setDailyPlan = (data: { date: string; open: number; close: number; volUp?: number; volDown?: number }) =>
+  api.post('/price-plan/daily', data);
+export const setBatchPlan = (data: { from: string; to: string; open: number; close: number }) =>
+  api.post('/price-plan/batch', data);
+export const updatePricePlan = (id: number, data: any) => api.put(`/price-plan/${id}`, data);
+export const deletePricePlan = (id: number) => api.delete(`/price-plan/${id}`);
+
 // Orders
 export const submitOrder = (data: { type: string; quantity: number; price: number }) =>
   api.post('/orders', data);
@@ -58,8 +67,10 @@ export const getFunds = () => api.get('/account/funds');
 
 // Admin
 export const getDashboard = () => api.get('/admin/dashboard');
-export const getUsers = () => api.get('/admin/users');
+export const getUsers = (params?: any) => api.get('/admin/users', { params });
 export const updateUser = (id: number, data: any) => api.put(`/admin/users/${id}`, data);
+export const addUser = (data: any) => api.post('/admin/users', data);
+export const deleteUser = (id: number) => api.delete(`/admin/users/${id}`);
 export const getTradeRecords = (params: any) => api.get('/admin/trades', { params });
 export const getLogs = (page = 1) => api.get('/admin/logs', { params: { page } });
 
@@ -75,6 +86,8 @@ export const exportTradesWord = (params?: any) =>
 export const exportAuditWord = () =>
   api.get('/export/audit-word', { responseType: 'blob' });
 export const backupTrades = () => api.post('/export/backup');
+export const dailySummary = (date?: string) =>
+  api.post('/export/daily-summary', { date }, { responseType: 'blob' });
 export const getBackupList = () => api.get('/export/backup/list');
 export const downloadBackup = (id: number) =>
   api.get(`/export/backup/download/${id}`, { responseType: 'blob' });

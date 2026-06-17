@@ -13,6 +13,7 @@ import accountRoutes from './routes/account';
 import exportRoutes, { autoBackup } from './routes/export';
 import marketRoutes from './routes/market';
 import hkDetailRoutes from './routes/hkdetail';
+import pricePlanRoutes, { triggerPricePlan } from './routes/pricePlan';
 import { requireAuth, requireAdmin } from './middleware/auth';
 
 const app = express();
@@ -34,6 +35,7 @@ app.use('/api/account', accountRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/market', marketRoutes);
 app.use('/api/hk', hkDetailRoutes);
+app.use('/api/price-plan', pricePlanRoutes);
 
 
 // 获取当前用户信息
@@ -44,7 +46,7 @@ app.get('/api/me', requireAuth, (req, res) => {
 // 获取标的信息（名称、代码）
 app.get('/api/stock-info', (_req, res) => {
   const items = db.prepare("SELECT key, value FROM settings WHERE key IN ('stock_code','stock_name')").all() as any[];
-  const info: any = { code: '02110.HK', name: '天诚控股' };
+  const info: any = { code: '02110.HK', name: '天成控股' };
   items.forEach((item: any) => {
     if (item.key === 'stock_code') info.code = item.value;
     if (item.key === 'stock_name') info.name = item.value;
@@ -77,8 +79,43 @@ app.put('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   if (role !== undefined) db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, userId);
   if (status !== undefined) db.prepare('UPDATE users SET status = ? WHERE id = ?').run(status, userId);
   if (balance !== undefined) db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(balance, userId);
+  if (password) {
+    const hash = require('bcryptjs').hashSync(password, 10);
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, userId);
+  }
   logOperation(req.user!.id, req.user!.username, 'update_user', `修改用户#${userId}: ${JSON.stringify(req.body)}`);
   res.json({ message: '更新成功' });
+});
+
+app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
+  const { username, real_name, password, balance, role } = req.body;
+  if (!username || !password) return res.status(400).json({ error: '用户名和密码必填' });
+  try {
+    const hash = require('bcryptjs').hashSync(password, 10);
+    db.prepare('INSERT INTO users (username, password_hash, real_name, role, balance) VALUES (?, ?, ?, ?, ?)').run(
+      username, hash, real_name || '', role || 'user', balance || 1000000
+    );
+    logOperation(req.user!.id, req.user!.username, 'add_user', `新增用户: ${username}`);
+    res.json({ message: '用户已创建' });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message.includes('UNIQUE') ? '用户名已存在' : e.message });
+  }
+});
+
+app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
+  const userId = req.params.id;
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
+  if (!user) return res.status(404).json({ error: '用户不存在' });
+  if (user.role === 'admin') {
+    const adminCount = (db.prepare("SELECT COUNT(*) as cnt FROM users WHERE role = 'admin'").get() as any).cnt;
+    if (adminCount <= 1) return res.status(400).json({ error: '不能删除最后一个管理员' });
+  }
+  db.prepare('DELETE FROM positions WHERE user_id = ?').run(userId);
+  db.prepare('DELETE FROM orders WHERE user_id = ?').run(userId);
+  db.prepare('DELETE FROM trade_records WHERE user_id = ?').run(userId);
+  db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+  logOperation(req.user!.id, req.user!.username, 'delete_user', `删除用户: ${user.username}`);
+  res.json({ message: '已删除' });
 });
 
 // 交易记录查询
@@ -123,9 +160,12 @@ app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
 // ==================== 定时自动备份 ====================
 
 let cronTask: ScheduledTask | null = null;
+let priceCronTask: ScheduledTask | null = null;
 
 function setupCron() {
   if (cronTask) cronTask.stop();
+  if (priceCronTask) priceCronTask.stop();
+
   const backupTime = (db.prepare("SELECT value FROM settings WHERE key = 'backup_time'").get() as any)?.value || '23:00';
   const [hour, minute] = backupTime.split(':').map(Number);
 
@@ -134,7 +174,14 @@ function setupCron() {
     autoBackup().catch(err => console.error('[cron] 备份失败:', err));
   }, { timezone: 'Asia/Shanghai' });
 
+  // 每分钟触发价格计划
+  priceCronTask = cron.schedule('* * * * *', () => {
+    const count = triggerPricePlan();
+    if (count > 0) console.log(`[cron] 触发 ${count} 个价格计划`);
+  }, { timezone: 'Asia/Shanghai' });
+
   console.log(`⏰ 每日自动备份: ${backupTime} (北京时间)`);
+  console.log(`📊 价格计划每分钟自动触发已就绪`);
 }
 
 // ==================== 生产环境静态资源 ====================

@@ -11,6 +11,7 @@ import AuditManage from './pages/admin/AuditManage';
 import PriceManage from './pages/admin/PriceManage';
 import TradeRecords from './pages/admin/TradeRecords';
 import AdminDashboard from './pages/admin/Dashboard';
+import UserManage from './pages/admin/UserManage';
 import Navbar from './components/Navbar';
 
 function ProtectedRoute({ children, adminOnly }: { children: JSX.Element; adminOnly?: boolean }) {
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="/admin/audit" element={<ProtectedRoute adminOnly><Layout><AuditManage /></Layout></ProtectedRoute>} />
         <Route path="/admin/price" element={<ProtectedRoute adminOnly><Layout><PriceManage /></Layout></ProtectedRoute>} />
         <Route path="/admin/trades" element={<ProtectedRoute adminOnly><Layout><TradeRecords /></Layout></ProtectedRoute>} />
+        <Route path="/admin/users" element={<ProtectedRoute adminOnly><Layout><UserManage /></Layout></ProtectedRoute>} />
       </Routes>
     </HashRouter>
   );

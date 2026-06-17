@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { httpGetGBK } from '../utils/http';
+import db from '../db';
 
 const router = Router();
 
@@ -31,11 +32,42 @@ function calcChgSpeed(code: string, price: number): number {
   return Math.round((price - oldest.price) / oldest.price * 100 * 100) / 100;
 }
 
-// --------------- stocks ---------------
+// --------------- 港股列表 (120只) ---------------
 const CODES = [
-  '00700', '09988', '00388', '00941', '00005',
-  '01810', '02318', '01299', '03690', '00981',
-  '02269', '01024', '01347', '02015', '09618',
+  // === 科技互联网 (11) ===
+  '00700', '09988', '09618', '09888', '01024', '03690', '01810',
+  '09999', '00772', '01797', '02013',
+  // === 金融 (18) ===
+  '00388', '00005', '02318', '01299', '01398', '03988', '02628',
+  '00011', '02388', '03328', '00939', '01288', '03968', '06837',
+  '06030', '01339', '02601', '06060',
+  // === 消费 (12) ===
+  '09961', '09626', '09633', '01876', '06862', '02020',
+  '02331', '02018', '01698', '09899', '09992', '09901',
+  // === 医药 (10) ===
+  '02269', '01801', '06160', '09926', '01177', '01093', '02196',
+  '03320', '06618', '02607',
+  // === 汽车 (8) ===
+  '01211', '02015', '09868', '09863', '02333', '00175', '02238', '00489',
+  // === 地产 (12) ===
+  '00016', '01109', '00688', '00017', '00960', '02007', '00083',
+  '00101', '00012', '00004', '00683', '00823',
+  // === 能源 (8) ===
+  '00883', '00857', '00386', '01088', '02899', '01171', '01899', '01378',
+  // === 电信 (4) ===
+  '00728', '00762', '00788', '00941',
+  // === 公用事业 (6) ===
+  '00002', '00003', '00006', '00066', '01038', '02638',
+  // === 工业基建 (8) ===
+  '00669', '00144', '00152', '00267', '00358', '01186', '01800', '01898',
+  // === 博彩娱乐 (6) ===
+  '01928', '00880', '01128', '02282', '00027', '06883',
+  // === 食品饮料 (7) ===
+  '00291', '00168', '00322', '00151', '00220', '01458', '01044',
+  // === 综合 (6) ===
+  '00001', '01347', '00981', '00179', '00019', '00008',
+  // === 服饰零售 (4) ===
+  '01929', '00590', '06110', '01368',
 ];
 
 // --------------- Sina (reliable, basic fields) ---------------
@@ -82,7 +114,6 @@ async function fetchSina(): Promise<any[]> {
 }
 
 // --------------- Tencent enrichment ---------------
-// Fields: f37=成交额 f39=换手率% f43=振幅% f50=量比 f64=市盈率 f69=流通股本
 async function enrichTencent(results: any[]): Promise<void> {
   try {
     const text = await httpGetGBK(
@@ -105,7 +136,7 @@ async function enrichTencent(results: any[]): Promise<void> {
       if (floatShares > 0) r.floatCap = Math.round(r.price * floatShares);
     }
   } catch {
-    // Tencent failed → keep Sina data as-is
+    // Tencent failed -> keep Sina data as-is
   }
 }
 
@@ -119,6 +150,35 @@ router.get('/hklist', async (_req, res) => {
     if (results.length > 0) {
       results.sort((a: any, b: any) => a.code.localeCompare(b.code));
       await enrichTencent(results);
+
+      // 注入 02110.HK 天成控股（内部标的，置顶）
+      try {
+        const latest = db.prepare('SELECT open, high, low, close, volume FROM stock_prices ORDER BY id DESC LIMIT 1').get() as any;
+        if (latest) {
+          const prev = db.prepare('SELECT close FROM stock_prices ORDER BY id DESC LIMIT 1 OFFSET 1').get() as any;
+          const change = prev ? (latest.close - prev.close) : 0;
+          const changePct = prev ? ((change / prev.close) * 100) : 0;
+          results.unshift({
+            code: '02110',
+            name: '天成控股',
+            price: latest.close,
+            open: latest.open,
+            high: latest.high,
+            low: latest.low,
+            change: Math.round(change * 100) / 100,
+            changePct: Math.round(changePct * 100) / 100,
+            chgSpeed: 0,
+            turnover: 0,
+            volRatio: 0,
+            amplitude: latest.open > 0 ? Math.round(((latest.high - latest.low) / latest.open * 100) * 100) / 100 : 0,
+            volume: latest.volume,
+            amount: Math.round(latest.close * latest.volume * 100) / 100,
+            floatCap: 0,
+            pe: 0,
+          });
+        }
+      } catch {}
+
       cache.set('hklist', { data: results, ts: Date.now() });
       return res.json(results);
     }

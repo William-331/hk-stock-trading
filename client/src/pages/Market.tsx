@@ -55,7 +55,7 @@ export default function Market() {
 
   const [kline, setKline] = useState<any[]>([]);
   const [price, setPrice] = useState<PriceData | null>(null);
-  const [stockInfo, setStockInfo] = useState<StockInfo>({ code: '02110.HK', name: '天诚控股' });
+  const [stockInfo, setStockInfo] = useState<StockInfo>({ code: '02110.HK', name: '天成控股' });
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'orderbook' | 'trades'>('orderbook');
   const [isFavorite, setIsFavorite] = useState(false);

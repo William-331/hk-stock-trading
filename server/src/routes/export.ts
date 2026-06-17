@@ -145,23 +145,53 @@ export async function autoBackup() {
     ORDER BY ar.created_at DESC
   `).all() as any[];
   const prices = db.prepare('SELECT * FROM stock_prices WHERE created_at >= ? ORDER BY time_slot DESC').all(dateStr) as any[];
+  const positions = db.prepare('SELECT p.*, u.username, u.real_name FROM positions p JOIN users u ON u.id = p.user_id').all() as any[];
+  const accounts = db.prepare('SELECT id, username, real_name, role, balance, status FROM users ORDER BY id').all() as any[];
+  const dailyOrders = db.prepare(
+    "SELECT o.*, u.username, u.real_name FROM orders o JOIN users u ON u.id = o.user_id WHERE o.created_at >= ? ORDER BY o.created_at DESC"
+  ).all(dateStr) as any[];
 
-  // Excel
+  // Excel 每日汇总
   const xlsxFile = `auto_backup_${dateStr}.xlsx`;
   const xlsxPath = path.join(BACKUP_DIR, xlsxFile);
   const wb = new ExcelJS.Workbook();
 
-  const s1 = wb.addWorksheet('交易记录');
-  s1.addRow(['ID', '用户名', '姓名', '类型', '数量', '价格', '金额', '时间']);
-  trades.forEach(r => s1.addRow([r.id, r.username, r.real_name, r.type, r.quantity, r.price, r.amount, r.created_at]));
+  const addSheet = (name: string, headers: string[], rows: any[], mapFn: (r: any) => any[]) => {
+    const s = wb.addWorksheet(name);
+    s.addRow(headers);
+    rows.forEach(r => s.addRow(mapFn(r)));
+  };
 
-  const s2 = wb.addWorksheet('审批记录');
-  s2.addRow(['ID', '审核人', '申请人', '类型', '数量', '价格', '操作', '备注', '时间']);
-  audits.forEach(r => s2.addRow([r.id, r.auditor, r.applicant, r.type, r.quantity, r.price, r.action, r.comment, r.created_at]));
+  // 今日摘要
+  const s0 = wb.addWorksheet('每日汇总');
+  const stockName = (db.prepare("SELECT value FROM settings WHERE key='stock_name'").get() as any)?.value || '天成控股';
+  const latestPrice = prices.length > 0 ? prices[0] : null;
+  s0.addRow([`${stockName} 每日交易报告`]);
+  s0.addRow([`日期: ${dateStr}`]);
+  s0.addRow([`当日交易笔数: ${trades.length}`]);
+  s0.addRow([`当日订单数: ${dailyOrders.length}`]);
+  if (latestPrice) {
+    s0.addRow([`开盘: ${latestPrice.open}`, `最高: ${latestPrice.high}`, `最低: ${latestPrice.low}`, `收盘: ${latestPrice.close}`, `成交量: ${latestPrice.volume}`]);
+  }
+  s0.addRow([]);
 
-  const s3 = wb.addWorksheet('价格快照');
-  s3.addRow(['时间', '开盘', '最高', '最低', '收盘', '成交量']);
-  prices.forEach(r => s3.addRow([r.time_slot, r.open, r.high, r.low, r.close, r.volume]));
+  // 价格走势
+  addSheet('价格走势', ['时间', '开盘', '最高', '最低', '收盘', '成交量'], prices, r => [r.time_slot, r.open, r.high, r.low, r.close, r.volume]);
+
+  // 交易记录
+  addSheet('交易记录', ['ID', '用户名', '姓名', '类型', '数量', '价格', '金额', '时间'], trades, r => [r.id, r.username, r.real_name, r.type, r.quantity, r.price, r.amount, r.created_at]);
+
+  // 当日订单
+  addSheet('当日订单', ['ID', '用户名', '姓名', '类型', '数量', '价格', '状态', '时间'], dailyOrders, r => [r.id, r.username, r.real_name, r.type === 'buy' ? '买入' : '卖出', r.quantity, r.price, r.status, r.created_at]);
+
+  // 持仓汇总
+  addSheet('持仓汇总', ['用户ID', '用户名', '姓名', '持仓数量', '平均成本'], positions, r => [r.user_id, r.username, r.real_name, r.quantity, r.avg_cost]);
+
+  // 账户余额
+  addSheet('账户余额', ['ID', '用户名', '姓名', '角色', '余额', '状态'], accounts, r => [r.id, r.username, r.real_name, r.role, r.balance, r.status]);
+
+  // 审批记录
+  addSheet('审批记录', ['ID', '审核人', '申请人', '类型', '数量', '价格', '操作', '备注', '时间'], audits, r => [r.id, r.auditor, r.applicant, r.type, r.quantity, r.price, r.action, r.comment, r.created_at]);
 
   await wb.xlsx.writeFile(xlsxPath);
   db.prepare('INSERT INTO backups (filename, type, record_count) VALUES (?, ?, ?)').run(xlsxFile, 'auto_xlsx', trades.length);
@@ -176,8 +206,73 @@ export async function autoBackup() {
   fs.writeFileSync(docxPath, buf);
   db.prepare('INSERT INTO backups (filename, type, record_count) VALUES (?, ?, ?)').run(docxFile, 'auto_docx', trades.length);
 
-  console.log(`[auto-backup] ${dateStr}: Excel + Word 已备份 (${trades.length} 笔交易, ${prices.length} 条价格)`);
+  console.log(`[auto-backup] ${dateStr}: 每日汇总已生成 (${trades.length} 笔交易, ${prices.length} 条价格, ${positions.length} 个持仓)`);
 }
+
+// ==================== 手动每日汇总 ====================
+router.post('/daily-summary', requireAuth, async (req: Request, res: Response) => {
+  if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+
+  const { date } = req.body;
+  const dateStr = date || new Date().toISOString().slice(0, 10);
+
+  const trades = db.prepare('SELECT tr.*, u.username, u.real_name FROM trade_records tr JOIN users u ON u.id = tr.user_id WHERE tr.created_at >= ? AND tr.created_at <= ? ORDER BY tr.created_at DESC').all(dateStr, dateStr + ' 23:59:59') as any[];
+  const prices = db.prepare("SELECT * FROM stock_prices WHERE time_slot LIKE ? ORDER BY time_slot ASC").all(dateStr + '%') as any[];
+  const dailyOrders = db.prepare("SELECT o.*, u.username, u.real_name FROM orders o JOIN users u ON u.id = o.user_id WHERE o.created_at >= ? AND o.created_at <= ? ORDER BY o.created_at DESC").all(dateStr, dateStr + ' 23:59:59') as any[];
+  const positions = db.prepare('SELECT p.*, u.username, u.real_name FROM positions p JOIN users u ON u.id = p.user_id').all() as any[];
+  const accounts = db.prepare('SELECT id, username, real_name, role, balance, status FROM users ORDER BY id').all() as any[];
+
+  const stockName = (db.prepare("SELECT value FROM settings WHERE key='stock_name'").get() as any)?.value || '天成控股';
+  const latestPrice = prices.length > 0 ? prices[prices.length - 1] : null;
+
+  const wb = new ExcelJS.Workbook();
+
+  // 汇总页
+  const s0 = wb.addWorksheet('每日汇总');
+  s0.addRow([`${stockName} 每日交易报告`]);
+  s0.addRow([`日期: ${dateStr}`]);
+  s0.addRow([`交易笔数: ${trades.length}`]);
+  s0.addRow([`订单数: ${dailyOrders.length}`]);
+  if (latestPrice) {
+    s0.addRow([`开盘: ${latestPrice.open}  最高: ${latestPrice.high}  最低: ${latestPrice.low}  收盘: ${latestPrice.close}  成交量: ${latestPrice.volume}`]);
+  }
+  s0.addRow([]);
+
+  // 价格走势
+  const s1 = wb.addWorksheet('价格走势');
+  s1.addRow(['时间', '开盘', '最高', '最低', '收盘', '成交量']);
+  prices.forEach(r => s1.addRow([r.time_slot, r.open, r.high, r.low, r.close, r.volume]));
+
+  // 交易记录
+  const s2 = wb.addWorksheet('交易记录');
+  s2.addRow(['ID', '用户名', '姓名', '类型', '数量', '价格', '金额', '时间']);
+  trades.forEach(r => s2.addRow([r.id, r.username, r.real_name, r.type === 'buy' ? '买入' : '卖出', r.quantity, r.price, r.amount, r.created_at]));
+
+  // 当日订单
+  const s3 = wb.addWorksheet('当日订单');
+  s3.addRow(['ID', '用户名', '姓名', '类型', '数量', '价格', '状态', '时间']);
+  dailyOrders.forEach(r => s3.addRow([r.id, r.username, r.real_name, r.type === 'buy' ? '买入' : '卖出', r.quantity, r.price, r.status, r.created_at]));
+
+  // 持仓
+  const s4 = wb.addWorksheet('持仓汇总');
+  s4.addRow(['用户ID', '用户名', '姓名', '持仓数量', '平均成本']);
+  positions.forEach(r => s4.addRow([r.user_id, r.username, r.real_name, r.quantity, r.avg_cost]));
+
+  // 账户
+  const s5 = wb.addWorksheet('账户余额');
+  s5.addRow(['ID', '用户名', '姓名', '角色', '余额', '状态']);
+  accounts.forEach(r => s5.addRow([r.id, r.username, r.real_name, r.role, r.balance, r.status]));
+
+  const ts = dateStr.replace(/-/g, '');
+  const xlsxFile = `daily_summary_${ts}.xlsx`;
+  const xlsxPath = path.join(BACKUP_DIR, xlsxFile);
+  await wb.xlsx.writeFile(xlsxPath);
+
+  db.prepare('INSERT INTO backups (filename, type, record_count, created_by) VALUES (?, ?, ?, ?)').run(xlsxFile, 'daily_summary', trades.length, req.user!.id);
+  logOperation(req.user!.id, req.user!.username, 'daily_summary', `每日汇总: ${dateStr}`);
+
+  res.download(xlsxPath, xlsxFile);
+});
 
 // ==================== 备份列表/下载 ====================
 

@@ -31,6 +31,6 @@ echo.
 cd server
 start "HK Server" cmd /c "npm run dev && pause"
 timeout /t 3 /nobreak >nul
-start "" http://localhost:3001
+start "" http://localhost:3001/#/login
 echo Server starting... browser will open shortly.
 pause

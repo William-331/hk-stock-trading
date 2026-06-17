@@ -11,7 +11,7 @@ export default function AdminDashboard() {
   }, []);
 
   const cards = [
-    { label: '用户数', value: data.userCount, color: 'bg-blue-500', path: '' },
+    { label: '用户数', value: data.userCount, color: 'bg-blue-500', path: '/admin/users' },
     { label: '待审核', value: data.pendingCount, color: 'bg-yellow-500', path: '/admin/audit' },
     { label: '成交笔数', value: data.tradeCount, color: 'bg-green-500', path: '/admin/trades' },
     { label: '成交总额', value: '¥' + (data.totalAmount || 0).toFixed(0), color: 'bg-purple-500', path: '/admin/trades' },

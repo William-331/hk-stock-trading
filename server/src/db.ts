@@ -100,6 +100,19 @@ export function initDB() {
       updated_by INTEGER REFERENCES users(id),
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS price_plan (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      time_slot TEXT NOT NULL UNIQUE,
+      open REAL NOT NULL,
+      high REAL NOT NULL,
+      low REAL NOT NULL,
+      close REAL NOT NULL,
+      volume INTEGER NOT NULL DEFAULT 1000,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','executed','skipped')),
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   // 初始化默认设置

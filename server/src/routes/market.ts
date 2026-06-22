@@ -153,9 +153,9 @@ router.get('/hklist', async (_req, res) => {
 
       // 注入 02110.HK 天成控股（内部标的，置顶）
       try {
-        const latest = db.prepare('SELECT open, high, low, close, volume FROM stock_prices ORDER BY id DESC LIMIT 1').get() as any;
+        const latest = db.prepare('SELECT open, high, low, close, volume FROM stock_prices ORDER BY time_slot DESC, id DESC LIMIT 1').get() as any;
         if (latest) {
-          const prev = db.prepare('SELECT close FROM stock_prices ORDER BY id DESC LIMIT 1 OFFSET 1').get() as any;
+          const prev = db.prepare('SELECT close FROM stock_prices ORDER BY time_slot DESC, id DESC LIMIT 1 OFFSET 1').get() as any;
           const change = prev ? (latest.close - prev.close) : 0;
           const changePct = prev ? ((change / prev.close) * 100) : 0;
           results.unshift({

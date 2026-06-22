@@ -1,21 +1,22 @@
 import { Router, Request, Response } from 'express';
 import db, { logOperation } from '../db';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireAdmin } from '../middleware/auth';
 
 const router = Router();
 
 // 获取 K 线数据（价格时间序列）
-router.get('/kline', (_req: Request, res: Response) => {
+router.get('/kline', (req: Request, res: Response) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 1000, 1), 5000);
   const prices = db.prepare(
-    'SELECT open, high, low, close, volume, time_slot, created_at FROM stock_prices ORDER BY time_slot ASC LIMIT 200'
-  ).all();
+    'SELECT open, high, low, close, volume, time_slot, created_at FROM stock_prices ORDER BY time_slot ASC LIMIT ?'
+  ).all(limit);
   res.json(prices);
 });
 
 // 获取最新价格
 router.get('/latest', (_req: Request, res: Response) => {
   const latest = db.prepare(
-    'SELECT open, high, low, close, volume, time_slot FROM stock_prices ORDER BY id DESC LIMIT 1'
+    'SELECT open, high, low, close, volume, time_slot FROM stock_prices ORDER BY time_slot DESC, id DESC LIMIT 1'
   ).get() as any;
 
   if (!latest) {
@@ -24,7 +25,7 @@ router.get('/latest', (_req: Request, res: Response) => {
 
   // 涨跌幅（与上一根比较）
   const prev = db.prepare(
-    'SELECT close FROM stock_prices ORDER BY id DESC LIMIT 1 OFFSET 1'
+    'SELECT close FROM stock_prices ORDER BY time_slot DESC, id DESC LIMIT 1 OFFSET 1'
   ).get() as any;
 
   const change = prev ? (latest.close - prev.close) : 0;

@@ -72,7 +72,7 @@ app.get('/api/admin/users', requireAuth, requireAdmin, (_req, res) => {
 });
 
 app.put('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
-  const { role, status, balance } = req.body;
+  const { role, status, balance, password } = req.body;
   const userId = req.params.id;
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
   if (!user) return res.status(404).json({ error: '用户不存在' });
@@ -110,12 +110,19 @@ app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     const adminCount = (db.prepare("SELECT COUNT(*) as cnt FROM users WHERE role = 'admin'").get() as any).cnt;
     if (adminCount <= 1) return res.status(400).json({ error: '不能删除最后一个管理员' });
   }
-  db.prepare('DELETE FROM positions WHERE user_id = ?').run(userId);
-  db.prepare('DELETE FROM orders WHERE user_id = ?').run(userId);
-  db.prepare('DELETE FROM trade_records WHERE user_id = ?').run(userId);
-  db.prepare('DELETE FROM users WHERE id = ?').run(userId);
-  logOperation(req.user!.id, req.user!.username, 'delete_user', `删除用户: ${user.username}`);
-  res.json({ message: '已删除' });
+  try {
+    db.prepare('DELETE FROM audit_records WHERE order_id IN (SELECT id FROM orders WHERE user_id = ?)').run(userId);
+    db.prepare('DELETE FROM trade_records WHERE user_id = ?').run(userId);
+    db.prepare('DELETE FROM orders WHERE user_id = ?').run(userId);
+    db.prepare('DELETE FROM positions WHERE user_id = ?').run(userId);
+    db.prepare('DELETE FROM price_plan WHERE created_by = ?').run(userId);
+    db.prepare('UPDATE operation_logs SET user_id = NULL WHERE user_id = ?').run(userId);
+    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    logOperation(req.user!.id, req.user!.username, 'delete_user', `删除用户: ${user.username}`);
+    res.json({ message: '已删除' });
+  } catch (e: any) {
+    res.status(500).json({ error: '删除失败: ' + e.message });
+  }
 });
 
 // 交易记录查询

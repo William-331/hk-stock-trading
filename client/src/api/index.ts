@@ -32,7 +32,7 @@ export const register = (username: string, password: string, real_name: string) 
   api.post('/auth/register', { username, password, real_name });
 
 // Stock / K-line
-export const getKline = () => api.get('/stocks/kline');
+export const getKline = (limit = 1000) => api.get('/stocks/kline', { params: { limit } });
 export const getLatestPrice = () => api.get('/stocks/latest');
 export const addPrice = (data: any) => api.post('/stocks/add', data);
 export const batchAddPrice = (prices: any[]) => api.post('/stocks/batch', { prices });
@@ -44,7 +44,13 @@ export const setDailyPlan = (data: { date: string; open: number; close: number; 
 export const setBatchPlan = (data: { from: string; to: string; open: number; close: number }) =>
   api.post('/price-plan/batch', data);
 export const updatePricePlan = (id: number, data: any) => api.put(`/price-plan/${id}`, data);
-export const deletePricePlan = (id: number) => api.delete(`/price-plan/${id}`);
+export const rebuildPriceRange = (data: {
+  from: string;
+  to: string;
+  applyToStockPrices?: boolean;
+  reason?: string;
+  days: Array<{ date: string; open: number; close: number; volUp?: number; volDown?: number; skip?: boolean }>;
+}) => api.post('/price-plan/rebuild-range', data);
 
 // Orders
 export const submitOrder = (data: { type: string; quantity: number; price: number }) =>

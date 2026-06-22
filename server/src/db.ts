@@ -165,7 +165,7 @@ export function seedData() {
   }
 
   // 初始化持仓（user1 持有 500 股）
-  const p = db.prepare('SELECT close FROM stock_prices ORDER BY id DESC LIMIT 1').get() as any;
+  const p = db.prepare('SELECT close FROM stock_prices ORDER BY time_slot DESC, id DESC LIMIT 1').get() as any;
   const latestPrice = p?.close || 10.50;
   db.prepare('INSERT INTO positions (user_id, quantity, avg_cost) VALUES (?, ?, ?)').run(1, 500, latestPrice);
 

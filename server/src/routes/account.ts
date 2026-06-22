@@ -15,7 +15,7 @@ router.get('/position', requireAuth, (req: Request, res: Response) => {
   const pos = db.prepare('SELECT * FROM positions WHERE user_id = ?').get(req.user!.id) as any;
   if (!pos) return res.json({ quantity: 0, avg_cost: 0 });
 
-  const latest = db.prepare('SELECT close FROM stock_prices ORDER BY id DESC LIMIT 1').get() as any;
+  const latest = db.prepare('SELECT close FROM stock_prices ORDER BY time_slot DESC, id DESC LIMIT 1').get() as any;
   const currentPrice = latest?.close || 0;
   const marketValue = pos.quantity * currentPrice;
   const profit = marketValue - pos.quantity * pos.avg_cost;

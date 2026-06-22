@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { getKline, setDailyPlan, getPricePlan, updatePricePlan, dailySummary, getLatestPrice, getStockInfo } from '../../api';
+import { useEffect, useMemo, useState } from 'react';
+import { getKline, setDailyPlan, getPricePlan, updatePricePlan, dailySummary, getLatestPrice, getStockInfo, rebuildPriceRange } from '../../api';
 import KlineChart from '../../components/KlineChart';
 import OrderBook from '../../components/OrderBook';
 
@@ -11,6 +11,16 @@ interface BatchDay {
   volUp: string;   // 波动上限，如 "1.0" = +1%
   volDown: string; // 波动下限，如 "2.0" = -2%
 }
+
+interface RebuildSummary {
+  tradingDays: number;
+  skippedDays: number;
+  planSlotsRebuilt: number;
+  stockSlotsRebuilt: number;
+  latestTimeSlotAfterRebuild: string | null;
+}
+
+type RebuildPhase = 'confirm' | 'submitting' | 'success' | 'error';
 
 export default function PriceManage() {
   const [kline, setKline] = useState<any[]>([]);
@@ -31,6 +41,13 @@ export default function PriceManage() {
   const [batchFrom, setBatchFrom] = useState('');
   const [batchTo, setBatchTo] = useState('');
   const [batchDays, setBatchDays] = useState<BatchDay[]>([]);
+  const [applyToStockPrices, setApplyToStockPrices] = useState(true);
+  const [rebuildReason, setRebuildReason] = useState('');
+  const [confirmingRebuild, setConfirmingRebuild] = useState(false);
+  const [rebuildPhase, setRebuildPhase] = useState<RebuildPhase>('confirm');
+  const [rebuildError, setRebuildError] = useState('');
+  const [rebuildResult, setRebuildResult] = useState<RebuildSummary | null>(null);
+  const [rebuildWarnings, setRebuildWarnings] = useState<string[]>([]);
 
   // ---- 二级波动编辑 ----
   const [editDay, setEditDay] = useState<string | null>(null);
@@ -41,7 +58,7 @@ export default function PriceManage() {
   useEffect(() => { loadData(); }, []);
 
   const loadData = () => {
-    Promise.all([getKline(), getLatestPrice(), getStockInfo()])
+    Promise.all([getKline(2000), getLatestPrice(), getStockInfo()])
       .then(([kRes, pRes, sRes]) => {
         setKline(kRes.data || []);
         setLatestPrice(pRes.data);
@@ -52,7 +69,7 @@ export default function PriceManage() {
   };
 
   const loadKline = () => {
-    getKline().then(res => setKline(res.data)).catch(console.error);
+    getKline(2000).then(res => setKline(res.data)).catch(console.error);
     getLatestPrice().then(res => setLatestPrice(res.data)).catch(() => {});
   };
 
@@ -62,7 +79,8 @@ export default function PriceManage() {
   };
 
   const isWeekend = (dateStr: string) => {
-    const d = new Date(dateStr + 'T00:00:00');
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const d = new Date(year, month - 1, day);
     return d.getDay() === 0 || d.getDay() === 6;
   };
 
@@ -83,8 +101,17 @@ export default function PriceManage() {
     return { label: '已收盘', color: 'bg-gray-100 text-gray-500' };
   };
   const tradingStatus = getTradingStatus();
+  const rebuildSummary = useMemo<RebuildSummary>(() => {
+    const tradingDays = batchDays.filter(d => !d.isWeekend && d.open && d.close).length;
+    return {
+      tradingDays,
+      skippedDays: batchDays.filter(d => d.isWeekend || !d.open || !d.close).length,
+      planSlotsRebuilt: tradingDays * 68,
+      stockSlotsRebuilt: applyToStockPrices ? tradingDays * 68 : 0,
+      latestTimeSlotAfterRebuild: null,
+    };
+  }, [batchDays, applyToStockPrices]);
 
-  // ========== 每日设定 ==========
   const handleDaily = async () => {
     if (!dailyDate || !dailyOpen || !dailyClose) { showMsg('请填写完整信息'); return; }
     try {
@@ -115,21 +142,89 @@ export default function PriceManage() {
     showMsg(`已生成 ${days.length} 天，其中 ${days.filter(d => d.isWeekend).length} 天周末`);
   };
 
-  const handleBatchSave = async () => {
-    let saved = 0;
-    for (const d of batchDays) {
-      if (d.isWeekend || !d.open || !d.close) continue;
-      try {
-        await setDailyPlan({
-          date: d.date, open: Number(d.open), close: Number(d.close),
-          volUp: Number(d.volUp), volDown: Number(d.volDown),
-        });
-        saved++;
-      } catch {}
-    }
-    showMsg(`已保存 ${saved} 个交易日`);
-    loadKline();
+  const closeRebuildModal = () => {
+    setConfirmingRebuild(false);
+    setRebuildPhase('confirm');
+    setRebuildError('');
+    setRebuildResult(null);
+    setRebuildWarnings([]);
   };
+
+  const handleBatchSave = async () => {
+    if (rebuildPhase === 'submitting') {
+      showMsg('正在执行历史重建，请稍候');
+      return;
+    }
+
+    if (!batchFrom || !batchTo || batchDays.length === 0) {
+      showMsg('请先生成历史重建日期列表');
+      return;
+    }
+
+    const invalidDay = batchDays.find(d => !d.isWeekend && (!d.open || !d.close));
+    if (invalidDay) {
+      showMsg(`${invalidDay.date} 的开盘价和收盘价未填写`);
+      return;
+    }
+
+    if (rebuildSummary.tradingDays === 0) {
+      showMsg('没有可重建的交易日');
+      return;
+    }
+
+    setRebuildPhase('confirm');
+    setRebuildError('');
+    setRebuildResult(null);
+    setRebuildWarnings([]);
+    setConfirmingRebuild(true);
+  };
+
+  const handleConfirmRebuild = async () => {
+    if (rebuildPhase === 'submitting') return;
+
+    setRebuildPhase('submitting');
+    setRebuildError('');
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const normalizedDays = Array.from(
+        new Map(
+          batchDays.map(d => [d.date, {
+            date: d.date,
+            open: Number(d.open || 0),
+            close: Number(d.close || 0),
+            volUp: Number(d.volUp || 1),
+            volDown: Number(d.volDown || 1),
+            skip: d.isWeekend || !d.open || !d.close,
+          }])
+        ).values()
+      );
+
+      const payload = {
+        from: batchFrom,
+        to: batchTo,
+        applyToStockPrices,
+        reason: rebuildReason,
+        days: normalizedDays,
+      };
+      const res = await rebuildPriceRange(payload);
+      const summary = (res.data as any).summary as RebuildSummary | undefined;
+      const warnings = Array.isArray((res.data as any).warnings) ? (res.data as any).warnings as string[] : [];
+      setRebuildResult(summary || null);
+      setRebuildWarnings(warnings);
+      setRebuildPhase('success');
+      showMsg(`已重建 ${(summary?.tradingDays ?? 0)} 个交易日，计划 ${(summary?.planSlotsRebuilt ?? 0)} 条${applyToStockPrices ? `，K线 ${(summary?.stockSlotsRebuilt ?? 0)} 条` : ''}`);
+      if (warnings.length) {
+        setTimeout(() => showMsg(warnings[0]), 800);
+      }
+      loadKline();
+    } catch (err: any) {
+      const errMsg = err.response?.data?.error || err.message || '历史重建失败';
+      setRebuildError(errMsg);
+      setRebuildPhase('error');
+    }
+  };
+
 
   // ========== 每日汇总 ==========
   const handleDailySummary = async () => {
@@ -194,7 +289,7 @@ export default function PriceManage() {
         </div>
         {msg && <div className="mb-3 px-3 py-2 bg-blue-100 text-blue-700 rounded-lg text-sm">{msg}</div>}
         {editDayPlans.length === 0 ? (
-          <div className="py-8 text-center text-xs text-gray-400">该日期暂无价格计划，请先在每日设定或批量设定中生成</div>
+          <div className="py-8 text-center text-xs text-gray-400">该日期暂无价格计划，请先在每日设定或历史重建中生成</div>
         ) : (
           <div className="space-y-1 max-h-[70vh] overflow-y-auto">
             {editDayPlans.map(p => (
@@ -280,7 +375,7 @@ export default function PriceManage() {
       <div className="flex border-b mb-4">
         {[
           { k: 'daily' as const, label: '每日设定' },
-          { k: 'batch' as const, label: '批量设定' },
+          { k: 'batch' as const, label: '历史重建' },
         ].map(t => (
           <button key={t.k} onClick={() => setTab(t.k)}
             className={`flex-1 py-2 text-center text-sm font-medium ${tab === t.k ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500'}`}>
@@ -324,7 +419,7 @@ export default function PriceManage() {
         </div>
       )}
 
-      {/* ==================== Tab 2: 批量设定 ==================== */}
+      {/* ==================== Tab 2: 历史重建 ==================== */}
       {tab === 'batch' && (
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
@@ -339,13 +434,37 @@ export default function PriceManage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           </div>
+
+          <textarea
+            value={rebuildReason}
+            onChange={e => setRebuildReason(e.target.value)}
+            placeholder="填写本次历史重建原因（建议记录用途/日期段）"
+            rows={2}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+
+          <label className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+            <input
+              type="checkbox"
+              checked={applyToStockPrices}
+              onChange={e => setApplyToStockPrices(e.target.checked)}
+            />
+            <span>同步覆盖真实K线（危险操作）</span>
+          </label>
+
           <button onClick={handleGenerateList} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
             生成日期列表
           </button>
 
           {batchDays.length > 0 && (
             <>
-              <div className="text-xs text-gray-400">填写每日开盘价、收盘价，然后保存。周末自动跳过。</div>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                将按区间重建历史价格计划{applyToStockPrices ? '并同步覆盖真实K线' : ''}。周末自动跳过，保存前可继续进入“当日波动”做细调。
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-gray-100 px-3 py-2 text-xs text-gray-600">
+                <span>预计重建 {rebuildSummary.tradingDays} 个交易日 / {rebuildSummary.planSlotsRebuilt} 个计划点</span>
+                <span>{applyToStockPrices ? `同步覆盖 ${rebuildSummary.stockSlotsRebuilt} 个K线点` : '仅重建计划层'}</span>
+              </div>
               <div className="flex items-center gap-2 px-2 py-1.5 bg-gray-100 rounded text-xs font-medium text-gray-500">
                 <span className="w-24">日期</span>
                 <span className="flex-1">开盘价</span>
@@ -391,10 +510,136 @@ export default function PriceManage() {
                 ))}
               </div>
               <button onClick={handleBatchSave} className="w-full py-3 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
-                全部保存
+                准备重建
               </button>
             </>
           )}
+        </div>
+      )}
+
+      {confirmingRebuild && (
+        <div className="fixed inset-0 z-50 bg-black/40 px-4 flex items-center justify-center">
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl space-y-3">
+            <h3 className="text-base font-bold text-gray-800">
+              {rebuildPhase === 'success' ? '历史重建完成' : rebuildPhase === 'error' ? '历史重建失败' : '确认历史重建'}
+            </h3>
+
+            {(rebuildPhase === 'confirm' || rebuildPhase === 'submitting') && (
+              <>
+                <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                  该操作将覆盖 {batchFrom} 至 {batchTo} 区间内的历史价格计划{applyToStockPrices ? '与真实K线' : ''}，无法自动撤销。
+                </div>
+                <div className="text-sm text-gray-600 space-y-1">
+                  <div>交易日：{rebuildSummary.tradingDays} 天</div>
+                  <div>计划点：{rebuildSummary.planSlotsRebuilt} 条</div>
+                  <div>K线点：{applyToStockPrices ? `${rebuildSummary.stockSlotsRebuilt} 条` : '本次不覆盖真实K线'}</div>
+                  <div>备注：{rebuildReason.trim() || '未填写'}</div>
+                </div>
+              </>
+            )}
+
+            {rebuildPhase === 'submitting' && (
+              <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-3 text-sm text-blue-700">
+                <div className="font-medium">历史重建执行中...</div>
+                <div className="mt-1 text-xs text-blue-600">正在提交区间计划并刷新最新行情，请勿关闭当前弹窗。</div>
+              </div>
+            )}
+
+            {rebuildPhase === 'error' && (
+              <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-3 text-sm text-red-700 space-y-1">
+                <div className="font-medium">本次历史重建未完成</div>
+                <div className="text-xs break-all">{rebuildError || '历史重建失败，请稍后重试'}</div>
+              </div>
+            )}
+
+            {rebuildPhase === 'success' && rebuildResult && (
+              <div className="space-y-3">
+                <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-3 text-sm text-green-700 space-y-1">
+                  <div className="font-medium">历史重建已完成并刷新图表数据</div>
+                  <div>交易日：{rebuildResult.tradingDays} 天</div>
+                  <div>计划点：{rebuildResult.planSlotsRebuilt} 条</div>
+                  <div>K线点：{applyToStockPrices ? `${rebuildResult.stockSlotsRebuilt} 条` : '本次未覆盖真实K线'}</div>
+                  <div>跳过日期：{rebuildResult.skippedDays} 天</div>
+                </div>
+                {rebuildWarnings.length > 0 && (
+                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 space-y-1">
+                    {rebuildWarnings.map((warning, idx) => (
+                      <div key={`${warning}-${idx}`}>{warning}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {rebuildPhase === 'confirm' && (
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleConfirmRebuild}
+                  className="flex-1 py-2 bg-red-500 text-white rounded-lg text-sm font-medium hover:bg-red-600"
+                >
+                  确认执行
+                </button>
+                <button
+                  type="button"
+                  onClick={closeRebuildModal}
+                  className="px-4 py-2 bg-gray-200 rounded-lg text-sm"
+                >
+                  取消
+                </button>
+              </div>
+            )}
+
+            {rebuildPhase === 'submitting' && (
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled
+                  className="flex-1 py-2 bg-red-400 text-white rounded-lg text-sm font-medium disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  重建中...
+                </button>
+                <button
+                  type="button"
+                  disabled
+                  className="px-4 py-2 bg-gray-200 rounded-lg text-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  请稍候
+                </button>
+              </div>
+            )}
+
+            {rebuildPhase === 'error' && (
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleConfirmRebuild}
+                  className="flex-1 py-2 bg-red-500 text-white rounded-lg text-sm font-medium hover:bg-red-600"
+                >
+                  重新尝试
+                </button>
+                <button
+                  type="button"
+                  onClick={closeRebuildModal}
+                  className="px-4 py-2 bg-gray-200 rounded-lg text-sm"
+                >
+                  关闭
+                </button>
+              </div>
+            )}
+
+            {rebuildPhase === 'success' && (
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={closeRebuildModal}
+                  className="flex-1 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700"
+                >
+                  完成
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

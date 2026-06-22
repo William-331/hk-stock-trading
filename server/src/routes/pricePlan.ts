@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db, { logOperation } from '../db';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireAdmin } from '../middleware/auth';
 
 const router = Router();
 
@@ -31,7 +31,8 @@ function tradingSlots(dateStr: string): string[] {
 
 // 判断是否周末
 function isWeekend(dateStr: string): boolean {
-  const d = new Date(dateStr + 'T00:00:00');
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const d = new Date(year, month - 1, day);
   return d.getDay() === 0 || d.getDay() === 6;
 }
 
@@ -58,6 +59,29 @@ function generatePrice(openPrice: number, closePrice: number, index: number, tot
   const l = Math.round(Math.min(o, c) * (1 - volDown / 200) * 100) / 100;
   const v = Math.floor(Math.random() * 5000) + 2000;
   return { open: o, high: h, low: l, close: c, volume: v };
+}
+
+function toRangeStart(dateStr: string) {
+  return `${dateStr} 00:00`;
+}
+
+function toRangeEnd(dateStr: string) {
+  return `${dateStr} 23:59`;
+}
+
+function getLatestTimeSlot() {
+  const latest = db.prepare(
+    'SELECT time_slot FROM stock_prices ORDER BY time_slot DESC, id DESC LIMIT 1'
+  ).get() as any;
+  return latest?.time_slot || null;
+}
+
+function buildSlotsForDay(date: string, open: number, close: number, volUp = 1.0, volDown = 1.0) {
+  const slots = tradingSlots(date).filter(isTradingTime);
+  return slots.map((timeSlot, index) => ({
+    time_slot: timeSlot,
+    ...generatePrice(open, close, index, slots.length, volUp, volDown),
+  }));
 }
 
 // ================================================================
@@ -174,8 +198,153 @@ router.post('/batch', requireAuth, (req: Request, res: Response) => {
 });
 
 // ================================================================
-//  PUT /api/price-plan/:id — 二级精细调整某个时间点
+//  POST /api/price-plan/rebuild-range — 重建历史区间计划并可同步覆盖K线
 // ================================================================
+router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Response) => {
+  const { from, to, days, applyToStockPrices, reason } = req.body as {
+    from?: string;
+    to?: string;
+    applyToStockPrices?: boolean;
+    reason?: string;
+    days?: Array<{ date: string; open: number; close: number; volUp?: number; volDown?: number; skip?: boolean }>;
+  };
+
+  if (!from || !to) {
+    return res.status(400).json({ error: '起始日期和结束日期必填' });
+  }
+  if (!Array.isArray(days) || days.length === 0) {
+    return res.status(400).json({ error: '重建日期列表不能为空' });
+  }
+
+  const start = new Date(from + 'T00:00:00');
+  const end = new Date(to + 'T00:00:00');
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
+    return res.status(400).json({ error: '日期范围无效' });
+  }
+
+  const dayMap = new Map(days.map(day => [day.date, day]));
+  const activeDays: Array<{ date: string; open: number; close: number; volUp: number; volDown: number }> = [];
+  const skippedDays: string[] = [];
+  const warnings: string[] = [];
+
+  const current = new Date(start);
+  while (current <= end) {
+    const dateStr = current.toISOString().slice(0, 10);
+    const isWk = isWeekend(dateStr);
+    const input = dayMap.get(dateStr);
+
+    if (isWk || input?.skip) {
+      skippedDays.push(dateStr);
+      current.setDate(current.getDate() + 1);
+      continue;
+    }
+
+    if (!input) {
+      return res.status(400).json({ error: `${dateStr} 缺少重建参数` });
+    }
+
+    const open = Number(input.open);
+    const close = Number(input.close);
+    const volUp = input.volUp !== undefined ? Number(input.volUp) : 1.0;
+    const volDown = input.volDown !== undefined ? Number(input.volDown) : 1.0;
+
+    if (!Number.isFinite(open) || open <= 0 || !Number.isFinite(close) || close <= 0) {
+      return res.status(400).json({ error: `${dateStr} 的开盘价/收盘价无效` });
+    }
+    if (!Number.isFinite(volUp) || volUp < 0 || !Number.isFinite(volDown) || volDown < 0) {
+      return res.status(400).json({ error: `${dateStr} 的波动参数无效` });
+    }
+
+    activeDays.push({ date: dateStr, open, close, volUp, volDown });
+    current.setDate(current.getDate() + 1);
+  }
+
+  if (activeDays.length === 0) {
+    return res.status(400).json({ error: '没有可重建的交易日' });
+  }
+
+  const planRows = activeDays.flatMap(day => buildSlotsForDay(day.date, day.open, day.close, day.volUp, day.volDown));
+  if (planRows.length === 0) {
+    return res.status(400).json({ error: '未生成任何价格计划点' });
+  }
+
+  const uniquePlanRows = Array.from(
+    new Map(planRows.map(row => [row.time_slot, row])).values()
+  );
+
+  if (uniquePlanRows.length !== planRows.length) {
+    warnings.push(`检测到 ${planRows.length - uniquePlanRows.length} 个重复时间点，已在重建前自动去重`);
+  }
+
+  const deletePlanRange = db.prepare('DELETE FROM price_plan WHERE time_slot >= ? AND time_slot <= ?');
+  const deletePlanBySlots = db.prepare(
+    `DELETE FROM price_plan WHERE time_slot IN (${uniquePlanRows.map(() => '?').join(', ')})`
+  );
+  const deleteStockRange = db.prepare('DELETE FROM stock_prices WHERE time_slot >= ? AND time_slot <= ?');
+  const deleteStockBySlots = db.prepare(
+    `DELETE FROM stock_prices WHERE time_slot IN (${uniquePlanRows.map(() => '?').join(', ')})`
+  );
+  const insertPlan = db.prepare(
+    'INSERT OR REPLACE INTO price_plan (time_slot, open, high, low, close, volume, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  const insertStock = db.prepare(
+    'INSERT INTO stock_prices (time_slot, open, high, low, close, volume, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+
+  try {
+    const tx = db.transaction(() => {
+      deletePlanRange.run(toRangeStart(from), toRangeEnd(to));
+      deletePlanBySlots.run(...uniquePlanRows.map(row => row.time_slot));
+      if (applyToStockPrices) {
+        deleteStockRange.run(toRangeStart(from), toRangeEnd(to));
+        deleteStockBySlots.run(...uniquePlanRows.map(row => row.time_slot));
+      }
+
+      for (const row of uniquePlanRows) {
+        insertPlan.run(row.time_slot, row.open, row.high, row.low, row.close, row.volume, 'pending', req.user?.id || 1);
+        if (applyToStockPrices) {
+          insertStock.run(row.time_slot, row.open, row.high, row.low, row.close, row.volume, req.user?.id || 1);
+        }
+      }
+
+      logOperation(
+        req.user?.id || 0,
+        req.user?.username || '',
+        'rebuild_price_range',
+        JSON.stringify({
+          from,
+          to,
+          tradingDays: activeDays.length,
+          skippedDays: skippedDays.length,
+          planSlotsRebuilt: uniquePlanRows.length,
+          stockSlotsRebuilt: applyToStockPrices ? uniquePlanRows.length : 0,
+          applyToStockPrices: !!applyToStockPrices,
+          reason: (reason || '').trim(),
+        })
+      );
+    });
+    tx();
+
+    if (!applyToStockPrices) {
+      warnings.push('本次仅重建价格计划，未同步覆盖真实K线');
+    }
+
+    res.json({
+      message: `已重建 ${activeDays.length} 个交易日`,
+      summary: {
+        tradingDays: activeDays.length,
+        skippedDays: skippedDays.length,
+        planSlotsRebuilt: uniquePlanRows.length,
+        stockSlotsRebuilt: applyToStockPrices ? uniquePlanRows.length : 0,
+        latestTimeSlotAfterRebuild: getLatestTimeSlot(),
+      },
+      warnings,
+    });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message || '历史重建失败' });
+  }
+});
+
 router.put('/:id', requireAuth, (req: Request, res: Response) => {
   const plan = db.prepare('SELECT * FROM price_plan WHERE id = ?').get(req.params.id) as any;
   if (!plan) return res.status(404).json({ error: '不存在' });

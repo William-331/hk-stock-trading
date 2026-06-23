@@ -31,6 +31,9 @@ export const login = (username: string, password: string) =>
 export const register = (username: string, password: string, real_name: string) =>
   api.post('/auth/register', { username, password, real_name });
 
+export const changePassword = (oldPassword: string, newPassword: string) =>
+  api.post('/auth/change-password', { oldPassword, newPassword });
+
 // Stock / K-line
 export const getKline = (limit = 1000) => api.get('/stocks/kline', { params: { limit } });
 export const getLatestPrice = () => api.get('/stocks/latest');

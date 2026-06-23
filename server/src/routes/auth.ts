@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import db from '../db';
-import { JWT_SECRET } from '../middleware/auth';
+import { JWT_SECRET, requireAuth } from '../middleware/auth';
 
 const router = Router();
 
@@ -69,6 +69,37 @@ router.post('/register', (req: Request, res: Response) => {
   db.prepare('INSERT INTO positions (user_id, quantity, avg_cost) VALUES (?, 0, 0)').run(result.lastInsertRowid);
 
   res.json({ message: '注册成功' });
+});
+
+// 修改密码（登录用户本人）
+router.post('/change-password', requireAuth, (req: Request, res: Response) => {
+  const { oldPassword, newPassword } = req.body;
+  if (!oldPassword || !newPassword) {
+    return res.status(400).json({ error: '请输入原密码和新密码' });
+  }
+  if (String(newPassword).length < 6) {
+    return res.status(400).json({ error: '新密码至少6位' });
+  }
+  if (oldPassword === newPassword) {
+    return res.status(400).json({ error: '新密码不能与原密码相同' });
+  }
+
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as any;
+  if (!user) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+  if (!bcrypt.compareSync(oldPassword, user.password_hash)) {
+    return res.status(400).json({ error: '原密码错误' });
+  }
+
+  const hash = bcrypt.hashSync(newPassword, 10);
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, user.id);
+
+  db.prepare(
+    'INSERT INTO operation_logs (user_id, username, action, detail) VALUES (?, ?, ?, ?)'
+  ).run(user.id, user.username, 'change_password', '用户修改密码');
+
+  res.json({ message: '密码修改成功' });
 });
 
 export default router;

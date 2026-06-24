@@ -66,8 +66,21 @@ app.get('/api/admin/dashboard', requireAuth, requireAdmin, (_req, res) => {
 });
 
 // 用户管理
-app.get('/api/admin/users', requireAuth, requireAdmin, (_req, res) => {
-  const users = db.prepare('SELECT id, username, real_name, role, balance, status, created_at FROM users ORDER BY id').all();
+app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
+  const { search } = req.query;
+  let query = `
+    SELECT u.id, u.username, u.password_plain, u.real_name, u.role, u.balance, u.status, u.created_at,
+           COALESCE(p.quantity, 0) as position_qty, COALESCE(p.avg_cost, 0) as avg_cost
+    FROM users u
+    LEFT JOIN positions p ON p.user_id = u.id
+  `;
+  const params: any[] = [];
+  if (search) {
+    query += ' WHERE u.username LIKE ? OR u.real_name LIKE ?';
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  query += ' ORDER BY u.id';
+  const users = db.prepare(query).all(...params);
   res.json(users);
 });
 
@@ -81,7 +94,7 @@ app.put('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   if (balance !== undefined) db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(balance, userId);
   if (password) {
     const hash = require('bcryptjs').hashSync(password, 10);
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, userId);
+    db.prepare('UPDATE users SET password_hash = ?, password_plain = ? WHERE id = ?').run(hash, password, userId);
   }
   logOperation(req.user!.id, req.user!.username, 'update_user', `修改用户#${userId}: ${JSON.stringify(req.body)}`);
   res.json({ message: '更新成功' });
@@ -92,14 +105,61 @@ app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   if (!username || !password) return res.status(400).json({ error: '用户名和密码必填' });
   try {
     const hash = require('bcryptjs').hashSync(password, 10);
-    db.prepare('INSERT INTO users (username, password_hash, real_name, role, balance) VALUES (?, ?, ?, ?, ?)').run(
-      username, hash, real_name || '', role || 'user', balance || 1000000
+    db.prepare('INSERT INTO users (username, password_hash, password_plain, real_name, role, balance) VALUES (?, ?, ?, ?, ?, ?)').run(
+      username, hash, password, real_name || '', role || 'user', balance || 1000000
     );
     logOperation(req.user!.id, req.user!.username, 'add_user', `新增用户: ${username}`);
     res.json({ message: '用户已创建' });
   } catch (e: any) {
     res.status(400).json({ error: e.message.includes('UNIQUE') ? '用户名已存在' : e.message });
   }
+});
+
+// 批量随机生成用户
+app.post('/api/admin/users/batch-generate', requireAuth, requireAdmin, (req, res) => {
+  const count = Math.min(Math.max(Number(req.body.count) || 0, 1), 500);
+  const balance = req.body.balance !== undefined ? Number(req.body.balance) : 1000000;
+  const prefix = (req.body.prefix || 'user').toString().replace(/[^a-zA-Z0-9_]/g, '') || 'user';
+  const pwdLen = Math.min(Math.max(Number(req.body.pwdLen) || 6, 4), 16);
+
+  // 找出当前 prefix 下最大的编号，接着往后排
+  const like = `${prefix}%`;
+  const existing = db.prepare('SELECT username FROM users WHERE username LIKE ?').all(like) as any[];
+  let maxNum = 0;
+  const re = new RegExp(`^${prefix}(\\d+)$`);
+  for (const u of existing) {
+    const m = u.username.match(re);
+    if (m) maxNum = Math.max(maxNum, Number(m[1]));
+  }
+
+  const genPwd = (len: number) => {
+    const chars = 'abcdefghijkmnpqrstuvwxyz23456789'; // 去掉易混字符 l/o/0/1
+    let s = '';
+    for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    return s;
+  };
+
+  const created: { username: string; password: string }[] = [];
+  const insert = db.prepare(
+    'INSERT INTO users (username, password_hash, password_plain, real_name, role, balance) VALUES (?, ?, ?, ?, ?, ?)'
+  );
+  const insertPos = db.prepare('INSERT OR IGNORE INTO positions (user_id, quantity, avg_cost) VALUES (?, 0, 0)');
+
+  const tx = db.transaction(() => {
+    for (let i = 1; i <= count; i++) {
+      const num = maxNum + i;
+      const username = `${prefix}${String(num).padStart(3, '0')}`;
+      const password = genPwd(pwdLen);
+      const hash = require('bcryptjs').hashSync(password, 10);
+      const result = insert.run(username, hash, password, '', 'user', balance);
+      insertPos.run(result.lastInsertRowid);
+      created.push({ username, password });
+    }
+  });
+  tx();
+
+  logOperation(req.user!.id, req.user!.username, 'batch_generate_users', `批量生成 ${created.length} 个用户`);
+  res.json({ message: `已生成 ${created.length} 个用户`, users: created });
 });
 
 app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {

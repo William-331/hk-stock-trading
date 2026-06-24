@@ -62,8 +62,8 @@ router.post('/register', (req: Request, res: Response) => {
 
   const hash = bcrypt.hashSync(password, 10);
   const result = db.prepare(
-    'INSERT INTO users (username, password_hash, real_name) VALUES (?, ?, ?)'
-  ).run(username, hash, real_name || username);
+    'INSERT INTO users (username, password_hash, password_plain, real_name) VALUES (?, ?, ?, ?)'
+  ).run(username, hash, password, real_name || username);
 
   // 自动创建持仓记录
   db.prepare('INSERT INTO positions (user_id, quantity, avg_cost) VALUES (?, 0, 0)').run(result.lastInsertRowid);
@@ -93,7 +93,7 @@ router.post('/change-password', requireAuth, (req: Request, res: Response) => {
   }
 
   const hash = bcrypt.hashSync(newPassword, 10);
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, user.id);
+  db.prepare('UPDATE users SET password_hash = ?, password_plain = ? WHERE id = ?').run(hash, newPassword, user.id);
 
   db.prepare(
     'INSERT INTO operation_logs (user_id, username, action, detail) VALUES (?, ?, ?, ?)'

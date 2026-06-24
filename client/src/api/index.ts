@@ -79,6 +79,8 @@ export const getDashboard = () => api.get('/admin/dashboard');
 export const getUsers = (params?: any) => api.get('/admin/users', { params });
 export const updateUser = (id: number, data: any) => api.put(`/admin/users/${id}`, data);
 export const addUser = (data: any) => api.post('/admin/users', data);
+export const batchGenerateUsers = (data: { count: number; balance?: number; prefix?: string; pwdLen?: number }) =>
+  api.post('/admin/users/batch-generate', data);
 export const deleteUser = (id: number) => api.delete(`/admin/users/${id}`);
 export const getTradeRecords = (params: any) => api.get('/admin/trades', { params });
 export const getLogs = (page = 1) => api.get('/admin/logs', { params: { page } });

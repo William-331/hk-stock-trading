@@ -53,13 +53,27 @@ export default function Navbar() {
               {tab.label}
             </button>
           ))}
-          <button
-            onClick={() => setShowChangePassword(true)}
-            className="flex flex-col items-center py-2 px-3 text-xs text-gray-400 hover:text-blue-500"
-          >
-            <span className="text-lg mb-0.5">🔑</span>
-            改密
-          </button>
+          {user?.role === 'admin' ? (
+            <button
+              onClick={() => navigate('/admin/users')}
+              className={`flex flex-col items-center py-2 px-3 text-xs transition-colors ${
+                location.pathname === '/admin/users'
+                  ? 'text-blue-600 font-bold'
+                  : 'text-gray-500 hover:text-blue-500'
+              }`}
+            >
+              <span className="text-lg mb-0.5">👥</span>
+              用户
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowChangePassword(true)}
+              className="flex flex-col items-center py-2 px-3 text-xs text-gray-400 hover:text-blue-500"
+            >
+              <span className="text-lg mb-0.5">🔑</span>
+              改密
+            </button>
+          )}
           <button
             onClick={handleLogout}
             className="flex flex-col items-center py-2 px-3 text-xs text-gray-400 hover:text-red-500"

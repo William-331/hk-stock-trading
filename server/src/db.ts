@@ -16,6 +16,7 @@ export function initDB() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
+      password_plain TEXT NOT NULL DEFAULT '',
       real_name TEXT NOT NULL DEFAULT '',
       role TEXT NOT NULL DEFAULT 'user',
       balance REAL NOT NULL DEFAULT 1000000,
@@ -115,6 +116,13 @@ export function initDB() {
     );
   `);
 
+  // 老库迁移：补上 password_plain 列（旧库的 users 表没有这一列）
+  const cols = db.prepare("PRAGMA table_info(users)").all() as any[];
+  if (!cols.some(c => c.name === 'password_plain')) {
+    db.exec("ALTER TABLE users ADD COLUMN password_plain TEXT NOT NULL DEFAULT ''");
+    console.log('🔧 已为 users 表新增 password_plain 列');
+  }
+
   // 初始化默认设置
   const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   insertSetting.run('stock_code', '02110');
@@ -134,13 +142,13 @@ export function seedData() {
 
   // 创建默认用户
   const insertUser = db.prepare(
-    'INSERT INTO users (username, password_hash, real_name, role, balance) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO users (username, password_hash, password_plain, real_name, role, balance) VALUES (?, ?, ?, ?, ?, ?)'
   );
 
-  insertUser.run('user1', hash, '张三', 'user', 1000000);
-  insertUser.run('user2', hash, '李四', 'user', 1000000);
-  insertUser.run('admin', hash, '王管理', 'admin', 0);
-  insertUser.run('auditor', hash, '赵审核', 'admin', 0);
+  insertUser.run('user1', hash, '123456', '张三', 'user', 1000000);
+  insertUser.run('user2', hash, '123456', '李四', 'user', 1000000);
+  insertUser.run('admin', hash, '123456', '王管理', 'admin', 0);
+  insertUser.run('auditor', hash, '123456', '赵审核', 'admin', 0);
 
   // 初始化价格数据（最近24个10分钟段）
   const insertPrice = db.prepare(

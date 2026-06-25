@@ -47,6 +47,8 @@ export const setDailyPlan = (data: { date: string; open: number; close: number; 
 export const setBatchPlan = (data: { from: string; to: string; open: number; close: number }) =>
   api.post('/price-plan/batch', data);
 export const updatePricePlan = (id: number, data: any) => api.put(`/price-plan/${id}`, data);
+export const adjustPriceSmooth = (data: { id: number; close: number; window?: number }) =>
+  api.post('/price-plan/adjust-smooth', data);
 export const rebuildPriceRange = (data: {
   from: string;
   to: string;

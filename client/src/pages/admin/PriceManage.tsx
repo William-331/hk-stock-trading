@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getKline, setDailyPlan, getPricePlan, updatePricePlan, dailySummary, getLatestPrice, getStockInfo, rebuildPriceRange } from '../../api';
+import { getKline, setDailyPlan, getPricePlan, adjustPriceSmooth, dailySummary, getLatestPrice, getStockInfo, rebuildPriceRange } from '../../api';
 import KlineChart from '../../components/KlineChart';
 import OrderBook from '../../components/OrderBook';
 
@@ -54,6 +54,7 @@ export default function PriceManage() {
   const [editDayPlans, setEditDayPlans] = useState<any[]>([]);
   const [editSlotId, setEditSlotId] = useState<number | null>(null);
   const [editSlotPrice, setEditSlotPrice] = useState('');
+  const [smoothWindow, setSmoothWindow] = useState(6); // 平滑带动单侧范围（点数）
 
   useEffect(() => { loadData(); }, []);
 
@@ -263,17 +264,13 @@ export default function PriceManage() {
   const handleSlotSave = async (plan: any) => {
     try {
       const newClose = Number(editSlotPrice);
-      const diff = newClose - plan.close;
-      await updatePricePlan(plan.id, {
-        open: Math.round((plan.open + diff) * 100) / 100,
-        high: Math.round((plan.high + diff) * 100) / 100,
-        low: Math.round((plan.low + diff) * 100) / 100,
-        close: newClose,
-      });
+      if (!Number.isFinite(newClose) || newClose <= 0) { showMsg('请输入有效价格'); return; }
+      await adjustPriceSmooth({ id: plan.id, close: newClose, window: smoothWindow });
       setEditSlotId(null);
       const res = await getPricePlan({ date: editDay! });
       setEditDayPlans(res.data);
       loadKline();
+      showMsg(`已调整 ${plan.time_slot.slice(11)}，前后 ${smoothWindow} 点平滑过渡`);
     } catch (err: any) { showMsg(err.response?.data?.error || '更新失败'); }
   };
 
@@ -288,6 +285,18 @@ export default function PriceManage() {
           <h2 className="text-lg font-bold">{editDay} 分时波动</h2>
         </div>
         {msg && <div className="mb-3 px-3 py-2 bg-blue-100 text-blue-700 rounded-lg text-sm">{msg}</div>}
+        <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
+          <span className="shrink-0">改价时平滑带动前后</span>
+          <select value={smoothWindow} onChange={e => setSmoothWindow(Number(e.target.value))}
+            className="px-2 py-1 border border-blue-200 rounded text-xs bg-white">
+            <option value={0}>仅当前点</option>
+            <option value={3}>3 点（±15分钟）</option>
+            <option value={6}>6 点（±30分钟）</option>
+            <option value={12}>12 点（±1小时）</option>
+            <option value={24}>24 点（±2小时）</option>
+          </select>
+          <span className="shrink-0 text-blue-400">个点，自动顺势过渡</span>
+        </div>
         {editDayPlans.length === 0 ? (
           <div className="py-8 text-center text-xs text-gray-400">该日期暂无价格计划，请先在每日设定或历史重建中生成</div>
         ) : (
@@ -415,6 +424,9 @@ export default function PriceManage() {
           </div>
           <button onClick={handleDaily} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
             生成当日价格计划
+          </button>
+          <button onClick={() => openDayEdit(dailyDate)} className="w-full py-2 bg-white border border-blue-300 text-blue-600 rounded-lg text-sm font-medium hover:bg-blue-50">
+            编辑该日分时走势（逐点改价）
           </button>
         </div>
       )}

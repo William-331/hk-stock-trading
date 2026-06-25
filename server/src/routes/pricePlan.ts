@@ -44,21 +44,66 @@ function isTradingTime(timeStr: string): boolean {
   return true;
 }
 
-// 生成价格：从 open 到 close 平滑过渡 + 波动区间内随机
-// volUp: 上涨百分比上限（如1.0 = +1%）  volDown: 下跌百分比下限（如2.0 = -2%）
-function generatePrice(openPrice: number, closePrice: number, index: number, total: number, volUp = 1.0, volDown = 1.0) {
-  const ratio = total > 1 ? index / (total - 1) : 0;
-  const base = openPrice + (closePrice - openPrice) * ratio;
-  // 在波动区间内随机
-  const maxUp = base * (volUp / 100);
-  const maxDown = base * (volDown / 100);
-  const noise = (Math.random() * (maxUp + maxDown)) - maxDown;
-  const c = Math.round((base + noise) * 100) / 100;
-  const o = Math.round((base + (Math.random() - 0.5) * (maxUp + maxDown) * 0.5) * 100) / 100;
-  const h = Math.round(Math.max(o, c) * (1 + volUp / 200) * 100) / 100;
-  const l = Math.round(Math.min(o, c) * (1 - volDown / 200) * 100) / 100;
-  const v = Math.floor(Math.random() * 5000) + 2000;
-  return { open: o, high: h, low: l, close: c, volume: v };
+// 生成一整天的连续走势（布朗桥：两端钉死 open/close，中间连续随机游走）
+// volUp: 相对基线向上最大偏离% (如1.0=+1%)  volDown: 向下最大偏离%
+// 返回每个时间点的 {open, high, low, close, volume}，且每根开盘=上一根收盘（K线连续）
+function generateDaySeries(
+  openPrice: number,
+  closePrice: number,
+  total: number,
+  volUp = 1.0,
+  volDown = 1.0,
+): Array<{ open: number; high: number; low: number; close: number; volume: number }> {
+  if (total <= 0) return [];
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+
+  // 1. 基线：open -> close 的线性插值（每个点的收盘锚点）
+  const baseAt = (i: number) => {
+    const ratio = total > 1 ? i / (total - 1) : 1;
+    return openPrice + (closePrice - openPrice) * ratio;
+  };
+
+  // 2. 随机游走偏离量（布朗桥：起点终点偏离都为0，中间连续累加）
+  //    步长用平均波动幅度估算，保证整体起伏自然而不爆量
+  const avgBase = (openPrice + closePrice) / 2;
+  const maxDev = avgBase * (Math.max(volUp, volDown) / 100); // 允许的最大偏离绝对值
+  const step = maxDev / Math.max(2, Math.sqrt(total));        // 单步游走幅度
+
+  const walk: number[] = new Array(total).fill(0);
+  for (let i = 1; i < total; i++) {
+    walk[i] = walk[i - 1] + (Math.random() - 0.5) * 2 * step;
+  }
+  // 减去线性分量，让首尾偏离归零（布朗桥）
+  const lastWalk = walk[total - 1];
+  for (let i = 0; i < total; i++) {
+    walk[i] -= lastWalk * (total > 1 ? i / (total - 1) : 1);
+  }
+  // 限制偏离在 [-volDown%, +volUp%] 区间内
+  for (let i = 0; i < total; i++) {
+    const upLimit = baseAt(i) * (volUp / 100);
+    const downLimit = baseAt(i) * (volDown / 100);
+    if (walk[i] > upLimit) walk[i] = upLimit;
+    if (walk[i] < -downLimit) walk[i] = -downLimit;
+  }
+
+  // 3. 每个点的收盘 = 基线 + 偏离；端点强制钉死
+  const closes: number[] = [];
+  for (let i = 0; i < total; i++) closes.push(baseAt(i) + walk[i]);
+  closes[0] = openPrice;
+  closes[total - 1] = closePrice;
+
+  // 4. 组装 OHLC：开盘=上一根收盘（首根=openPrice），高低在开收之间外扩小幅
+  const series = [];
+  for (let i = 0; i < total; i++) {
+    const o = i === 0 ? openPrice : closes[i - 1];
+    const c = r2(closes[i]);
+    const wick = avgBase * (Math.max(volUp, volDown) / 100) * 0.15 * Math.random();
+    const h = r2(Math.max(o, c) + wick);
+    const l = r2(Math.min(o, c) - wick);
+    const v = Math.floor(Math.random() * 5000) + 2000;
+    series.push({ open: r2(o), high: h, low: l, close: c, volume: v });
+  }
+  return series;
 }
 
 function toRangeStart(dateStr: string) {
@@ -78,9 +123,10 @@ function getLatestTimeSlot() {
 
 function buildSlotsForDay(date: string, open: number, close: number, volUp = 1.0, volDown = 1.0) {
   const slots = tradingSlots(date).filter(isTradingTime);
+  const series = generateDaySeries(open, close, slots.length, volUp, volDown);
   return slots.map((timeSlot, index) => ({
     time_slot: timeSlot,
-    ...generatePrice(open, close, index, slots.length, volUp, volDown),
+    ...series[index],
   }));
 }
 
@@ -140,9 +186,10 @@ router.post('/daily', requireAuth, requireAdmin, (req: Request, res: Response) =
   );
 
   try {
+    const series = generateDaySeries(Number(open), Number(close), slots.length, up, down);
     const tx = db.transaction(() => {
       for (let i = 0; i < slots.length; i++) {
-        const p = generatePrice(Number(open), Number(close), i, slots.length, up, down);
+        const p = series[i];
         insert.run(slots[i], p.open, p.high, p.low, p.close, p.volume, 'pending', req.user?.id || 1);
       }
     });
@@ -181,8 +228,9 @@ router.post('/batch', requireAuth, requireAdmin, (req: Request, res: Response) =
         const dateStr = current.toISOString().slice(0, 10);
         if (!isWeekend(dateStr)) {
           const slots = tradingSlots(dateStr).filter(isTradingTime);
+          const series = generateDaySeries(Number(open), Number(close), slots.length);
           for (let i = 0; i < slots.length; i++) {
-            const p = generatePrice(Number(open), Number(close), i, slots.length);
+            const p = series[i];
             insert.run(slots[i], p.open, p.high, p.low, p.close, p.volume, 'pending', req.user?.id || 1);
             totalSlots++;
           }
@@ -365,8 +413,65 @@ router.put('/:id', requireAuth, requireAdmin, (req: Request, res: Response) => {
 });
 
 // ================================================================
-//  DELETE /api/price-plan/:id — 删除单个计划
+//  POST /api/price-plan/adjust-smooth — 改某点价格并平滑带动邻域
+//  Body: { id, close, window? }  window=单侧影响点数(默认6≈半小时)
 // ================================================================
+router.post('/adjust-smooth', requireAuth, requireAdmin, (req: Request, res: Response) => {
+  const { id, close, window } = req.body;
+  const target = db.prepare('SELECT * FROM price_plan WHERE id = ?').get(id) as any;
+  if (!target) return res.status(404).json({ error: '该价格点不存在' });
+  if (target.status !== 'pending') return res.status(400).json({ error: '已执行或已跳过的点不可修改' });
+
+  const newClose = Number(close);
+  if (!Number.isFinite(newClose) || newClose <= 0) return res.status(400).json({ error: '价格无效' });
+
+  const W = Math.min(Math.max(Number(window) || 6, 0), 30);
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+
+  // 取目标点当天的全部计划点（按时间排序）
+  const date = target.time_slot.slice(0, 10);
+  const day = db.prepare(
+    'SELECT * FROM price_plan WHERE time_slot LIKE ? ORDER BY time_slot ASC'
+  ).all(`${date}%`) as any[];
+  const idx = day.findIndex(p => p.id === target.id);
+  if (idx === -1) return res.status(404).json({ error: '定位失败' });
+
+  const delta = newClose - target.close;
+
+  // 1. 邻域按余弦权重分摊 delta（中心=1，边缘→0），仅改 pending 点
+  const newCloses = day.map(p => p.close);
+  for (let j = Math.max(0, idx - W); j <= Math.min(day.length - 1, idx + W); j++) {
+    if (day[j].status !== 'pending') continue;
+    const dist = Math.abs(j - idx);
+    const weight = W === 0 ? (j === idx ? 1 : 0) : (Math.cos((Math.PI * dist) / W) + 1) / 2;
+    newCloses[j] = day[j].close + delta * weight;
+  }
+  newCloses[idx] = newClose; // 中心点钉死为用户输入值
+
+  // 2. 重算受影响 pending 点的 OHLC：开盘=上一根收盘，保留原振幅特征
+  const update = db.prepare('UPDATE price_plan SET open=?, high=?, low=?, close=? WHERE id=?');
+  let changed = 0;
+  const tx = db.transaction(() => {
+    for (let j = Math.max(0, idx - W); j <= Math.min(day.length - 1, idx + W); j++) {
+      if (day[j].status !== 'pending') continue;
+      const c = r2(newCloses[j]);
+      const o = j > 0 ? r2(newCloses[j - 1]) : r2(day[j].open + delta);
+      const highWick = Math.max(0, day[j].high - Math.max(day[j].open, day[j].close));
+      const lowWick = Math.max(0, Math.min(day[j].open, day[j].close) - day[j].low);
+      const h = r2(Math.max(o, c) + highWick);
+      const l = r2(Math.min(o, c) - lowWick);
+      update.run(o, h, l, c, day[j].id);
+      changed++;
+    }
+  });
+  tx();
+
+  logOperation(req.user!.id, req.user!.username, 'adjust_price_smooth',
+    `${target.time_slot} 改为 ${newClose}，平滑带动 ${changed} 个点`);
+  res.json({ message: `已调整，平滑带动 ${changed} 个点`, changed });
+});
+
+
 router.delete('/:id', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const plan = db.prepare('SELECT * FROM price_plan WHERE id = ?').get(req.params.id) as any;
   if (!plan) return res.status(404).json({ error: '不存在' });
@@ -383,7 +488,7 @@ export function triggerPricePlan() {
   const nowStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
 
   const pending = db.prepare(
-    "SELECT * FROM price_plan WHERE status = 'pending' AND time_slot <= ? ORDER BY time_slot ASC LIMIT 50"
+    "SELECT * FROM price_plan WHERE status = 'pending' AND time_slot <= ? ORDER BY time_slot ASC LIMIT 5000"
   ).all(nowStr) as any[];
 
   const insertPrice = db.prepare(

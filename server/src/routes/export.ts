@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType, HeadingLevel } from 'docx';
 import db, { logOperation } from '../db';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireAdmin } from '../middleware/auth';
 import path from 'path';
 import fs from 'fs';
 
@@ -37,6 +37,24 @@ router.get('/audit', requireAuth, (_req: Request, res: Response) => {
   generateExcel(res, '审批记录', ['ID', '审核人', '申请人', '类型', '数量', '价格', '操作', '备注', '时间'], rows, (r: any) => [
     r.id, r.auditor, r.applicant, r.type === 'buy' ? '买入' : '卖出', r.quantity, r.price?.toFixed(2) || '-',
     r.action === 'approve' ? '通过' : '驳回', r.comment, r.created_at,
+  ]);
+});
+
+// 导出用户账号（含明文密码，仅管理员，演示用途）
+router.get('/users', requireAuth, requireAdmin, (req: Request, res: Response) => {
+  const { search } = req.query;
+  let query = `
+    SELECT u.id, u.username, u.password_plain, u.real_name, u.role, u.balance, u.status,
+           COALESCE(p.quantity, 0) as position_qty
+    FROM users u LEFT JOIN positions p ON p.user_id = u.id`;
+  const params: any[] = [];
+  if (search) { query += ' WHERE u.username LIKE ? OR u.real_name LIKE ?'; params.push(`%${search}%`, `%${search}%`); }
+  query += ' ORDER BY u.id';
+  const rows = db.prepare(query).all(...params);
+  logOperation(req.user!.id, req.user!.username, 'export_users', `导出用户账号 ${rows.length} 条`);
+  generateExcel(res, '用户账号', ['ID', '用户名', '密码', '姓名', '角色', '余额', '持仓', '状态'], rows, (r: any) => [
+    r.id, r.username, r.password_plain || '', r.real_name, r.role === 'admin' ? '管理员' : '用户',
+    r.balance, r.position_qty, r.status === 'active' ? '正常' : '冻结',
   ]);
 });
 

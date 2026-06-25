@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getUsers, updateUser, addUser, deleteUser, batchGenerateUsers } from '../../api';
+import { getUsers, updateUser, addUser, deleteUser, batchGenerateUsers, exportUsers } from '../../api';
 
 export default function UserManage() {
   const [users, setUsers] = useState<any[]>([]);
@@ -91,6 +91,19 @@ export default function UserManage() {
 
   const closeBatch = () => { setShowBatch(false); setBatchResult(null); };
 
+  const handleExport = async () => {
+    try {
+      const res = await exportUsers(search ? { search } : {});
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `用户账号_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      showMsg('已导出 Excel');
+    } catch (err: any) { showMsg('导出失败'); }
+  };
+
   const copyBatchResult = () => {
     if (!batchResult) return;
     const text = batchResult.map(u => `${u.username}\t${u.password}`).join('\n');
@@ -116,6 +129,10 @@ export default function UserManage() {
           <p className="text-xs text-gray-400 mt-0.5">查看与管理所有账户的密码、资金和持仓</p>
         </div>
         <div className="flex gap-2">
+          <button onClick={handleExport}
+            className="px-3.5 py-2 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 rounded-lg text-xs font-medium shadow-sm transition-colors">
+            📥 导出Excel
+          </button>
           <button onClick={() => setShowBatch(true)}
             className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-xs font-medium shadow-sm transition-colors">
             ⚡ 批量生成

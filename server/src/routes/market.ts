@@ -70,74 +70,48 @@ const CODES = [
   '01929', '00590', '06110', '01368',
 ];
 
-// --------------- Sina (reliable, basic fields) ---------------
-async function fetchSina(): Promise<any[]> {
+// --------------- 腾讯为主源（新浪对海外/云机房返回 Forbidden，不可用） ---------------
+// 腾讯港股字段(~分隔): [1]名 [3]现价 [4]昨收 [5]今开 [6]量 [32]涨跌 [33]涨跌幅
+//                      [34]高 [35]低 [37]额 [38]换手 [39]PE [43]振幅 [44]流通市值(亿) [45]总市值(亿) [49]量比
+async function fetchTencent(): Promise<any[]> {
   const text = await httpGetGBK(
-    `https://hq.sinajs.cn/list=${CODES.map((c) => `hk${c}`).join(',')}`,
-    'https://finance.sina.com.cn',
+    `https://qt.gtimg.cn/q=${CODES.map((c) => `hk${c}`).join(',')}`,
+    'https://gu.qq.com',
   );
   const results: any[] = [];
   for (const code of CODES) {
-    const re = new RegExp(`hk${code}[^"]*"([^"]*)"`, 'g');
+    const re = new RegExp(`v_hk${code}="([^"]*)"`);
     const m = re.exec(text);
     if (!m) continue;
-    const f = m[1].split(',');
-    if (f.length < 12) continue;
+    const f = m[1].split('~');
+    if (f.length < 34) continue;
 
     const p = (i: number) => parseFloat(f[i]) || 0;
-    const price = p(6);
-    const open  = p(2);
-    const high  = p(4);
-    const low   = p(5);
-    const ampl  = open > 0 ? ((high - low) / open * 100) : 0;
+    const price = p(3);
+    const open  = p(5);
+    const high  = p(34);
+    const low   = p(35);
 
     results.push({
       code,
-      name:        f[1] || f[0] || code,
+      name:        f[1] || code,
       price,
       open,
       high,
       low,
-      change:      p(7),
-      changePct:   p(8),
+      change:      p(32),
+      changePct:   p(33),
       chgSpeed:    calcChgSpeed(code, price),
-      turnover:    0,
-      volRatio:    0,
-      amplitude:   Math.round(ampl * 100) / 100,
-      volume:      parseInt(f[11]) || 0,
-      amount:      p(12) || 0,
-      floatCap:    0,
-      pe:          0,
+      turnover:    p(38) > 0 ? p(38) : 0,
+      volRatio:    p(49) > 0 ? p(49) : 0,
+      amplitude:   p(43) > 0 ? p(43) : (open > 0 ? Math.round((high - low) / open * 100 * 100) / 100 : 0),
+      volume:      p(6),
+      amount:      p(37) || 0,
+      floatCap:    p(44) > 0 ? Math.round(p(44) * 1e8) : 0,
+      pe:          p(39),
     });
   }
   return results;
-}
-
-// --------------- Tencent enrichment ---------------
-async function enrichTencent(results: any[]): Promise<void> {
-  try {
-    const text = await httpGetGBK(
-      `https://qt.gtimg.cn/q=${CODES.map((c) => `hk${c}`).join(',')}`,
-      'https://gu.qq.com',
-    );
-    for (const r of results) {
-      const re = new RegExp(`hk${r.code}[^"]*"([^"]*)"`, 'g');
-      const m = re.exec(text);
-      if (!m) continue;
-      const f = m[1].split('~');
-      if (f.length < 70) continue;
-      const p = (i: number) => parseFloat(f[i]) || 0;
-      const floatShares = p(69);
-      if (p(39) > 0)  r.turnover  = p(39);
-      if (p(50) > 0)  r.volRatio  = p(50);
-      if (p(43) > 0)  r.amplitude = p(43);
-      if (p(37) > 0)  r.amount    = p(37);
-      if (p(64))      r.pe        = p(64);
-      if (floatShares > 0) r.floatCap = Math.round(r.price * floatShares);
-    }
-  } catch {
-    // Tencent failed -> keep Sina data as-is
-  }
 }
 
 // --------------- route ---------------
@@ -146,10 +120,9 @@ router.get('/hklist', async (_req, res) => {
   if (cached && Date.now() - cached.ts < CACHE_MS) return res.json(cached.data);
 
   try {
-    const results = await fetchSina();
+    const results = await fetchTencent();
     if (results.length > 0) {
       results.sort((a: any, b: any) => a.code.localeCompare(b.code));
-      await enrichTencent(results);
 
       // 注入 02110.HK 天成控股（内部标的，置顶）
       try {

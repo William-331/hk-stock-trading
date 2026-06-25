@@ -1,8 +1,12 @@
 import Database from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 import bcrypt from 'bcryptjs';
 
 const DB_PATH = path.join(__dirname, '..', '..', 'data', 'trading.db');
+
+// 确保 data 目录存在(data/ 被 .gitignore 忽略,新机器 clone 后没有此目录)
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 const db = new Database(DB_PATH);
 

@@ -46,6 +46,7 @@ export default function UserManage() {
   const handleSaveEdit = async () => {
     try {
       await updateUser(editUser.id, {
+        real_name: editUser.real_name,
         role: editUser.role,
         status: editUser.status,
         balance: editUser.balance,
@@ -226,6 +227,12 @@ export default function UserManage() {
                 <label className="text-xs text-gray-500">用户名</label>
                 <input type="text" value={editUser.username} disabled
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-500" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500">姓名（昵称）</label>
+                <input type="text" value={editUser.real_name || ''} onChange={e => setEditUser({ ...editUser, real_name: e.target.value })}
+                  placeholder="显示在用户卡片上的名字"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
               </div>
               <div>
                 <label className="text-xs text-gray-500">新密码（留空不修改）</label>

@@ -86,10 +86,11 @@ app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
 });
 
 app.put('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
-  const { role, status, balance, password } = req.body;
+  const { role, status, balance, password, real_name } = req.body;
   const userId = req.params.id;
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
   if (!user) return res.status(404).json({ error: '用户不存在' });
+  if (real_name !== undefined) db.prepare('UPDATE users SET real_name = ? WHERE id = ?').run(real_name, userId);
   if (role !== undefined) db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, userId);
   if (status !== undefined) db.prepare('UPDATE users SET status = ? WHERE id = ?').run(status, userId);
   if (balance !== undefined) db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(balance, userId);

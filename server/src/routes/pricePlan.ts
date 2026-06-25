@@ -117,7 +117,7 @@ router.get('/', requireAuth, (req: Request, res: Response) => {
 //  POST /api/price-plan/daily — 设定某日开盘价+收盘价，自动生成
 //  Body: { date, open, close, volUp?, volDown? }
 // ================================================================
-router.post('/daily', requireAuth, (req: Request, res: Response) => {
+router.post('/daily', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const { date, open, close, volUp, volDown } = req.body;
   if (!date || !open || !close) {
     return res.status(400).json({ error: '日期、开盘价、收盘价必填' });
@@ -157,7 +157,7 @@ router.post('/daily', requireAuth, (req: Request, res: Response) => {
 //  POST /api/price-plan/batch — 批量设定日期范围
 //  Body: { from, to, open, close }   // 每日统一开盘收盘价
 // ================================================================
-router.post('/batch', requireAuth, (req: Request, res: Response) => {
+router.post('/batch', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const { from, to, open, close } = req.body;
   if (!from || !to || !open || !close) {
     return res.status(400).json({ error: '日期范围、开盘价、收盘价必填' });
@@ -345,7 +345,7 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
   }
 });
 
-router.put('/:id', requireAuth, (req: Request, res: Response) => {
+router.put('/:id', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const plan = db.prepare('SELECT * FROM price_plan WHERE id = ?').get(req.params.id) as any;
   if (!plan) return res.status(404).json({ error: '不存在' });
   if (plan.status !== 'pending') return res.status(400).json({ error: '已执行或已跳过的计划不可修改' });
@@ -367,7 +367,7 @@ router.put('/:id', requireAuth, (req: Request, res: Response) => {
 // ================================================================
 //  DELETE /api/price-plan/:id — 删除单个计划
 // ================================================================
-router.delete('/:id', requireAuth, (req: Request, res: Response) => {
+router.delete('/:id', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const plan = db.prepare('SELECT * FROM price_plan WHERE id = ?').get(req.params.id) as any;
   if (!plan) return res.status(404).json({ error: '不存在' });
   if (plan.status !== 'pending') return res.status(400).json({ error: '已执行的计划不可删除' });

@@ -67,7 +67,7 @@ router.get('/latest', (_req: Request, res: Response) => {
 });
 
 // 后台：添加价格点（每10分钟）
-router.post('/add', requireAuth, (req: Request, res: Response) => {
+router.post('/add', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const { time_slot, open, high, low, close, volume } = req.body;
   if (!time_slot || !open) {
     return res.status(400).json({ error: '时间和价格必填' });
@@ -98,7 +98,7 @@ router.post('/add', requireAuth, (req: Request, res: Response) => {
 });
 
 // 后台：批量添加价格点
-router.post('/batch', requireAuth, (req: Request, res: Response) => {
+router.post('/batch', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const { prices } = req.body;
   if (!prices || !Array.isArray(prices) || prices.length === 0) {
     return res.status(400).json({ error: '价格数组必填' });
@@ -139,7 +139,7 @@ router.post('/batch', requireAuth, (req: Request, res: Response) => {
 });
 
 // 后台：删除价格点
-router.delete('/:id', requireAuth, (req: Request, res: Response) => {
+router.delete('/:id', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM stock_prices WHERE id = ?').get(req.params.id) as any;
   if (!row) return res.status(404).json({ error: '不存在' });
 

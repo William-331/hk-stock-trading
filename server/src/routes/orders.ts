@@ -77,6 +77,11 @@ router.get('/:id', requireAuth, (req: Request, res: Response) => {
   const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id) as any;
   if (!order) return res.status(404).json({ error: '申请不存在' });
 
+  // 只能查看自己的申请（管理员可查看全部）
+  if (order.user_id !== req.user!.id && req.user!.role !== 'admin') {
+    return res.status(403).json({ error: '无权查看该申请' });
+  }
+
   const audit = db.prepare(
     'SELECT ar.*, u.real_name as auditor_name FROM audit_records ar LEFT JOIN users u ON u.id = ar.auditor_id WHERE ar.order_id = ?'
   ).all(order.id);

@@ -1,7 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = 'stock-trading-2024-secret-key';
+// 优先读环境变量(生产环境务必通过 JWT_SECRET 注入随机密钥);本地开发回退到默认值
+const JWT_SECRET = process.env.JWT_SECRET || 'stock-trading-2024-secret-key';
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  console.warn('⚠️  生产环境未设置 JWT_SECRET 环境变量,正在使用默认密钥(不安全)!');
+}
 
 export interface AuthUser {
   id: number;

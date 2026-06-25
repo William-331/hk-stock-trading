@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import cors from 'cors';
@@ -17,7 +18,7 @@ import pricePlanRoutes, { triggerPricePlan } from './routes/pricePlan';
 import { requireAuth, requireAdmin } from './middleware/auth';
 
 const app = express();
-const PORT = 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 app.use(cors());
 app.use(express.json());

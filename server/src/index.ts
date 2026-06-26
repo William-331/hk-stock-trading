@@ -256,8 +256,22 @@ function setupCron() {
 // ==================== 生产环境静态资源 ====================
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
 if (require('fs').existsSync(clientDist)) {
-  app.use(express.static(clientDist));
+  // 带 hash 的静态资源(assets/*.js|css)：文件名随内容变，可长期缓存
+  // index.html：名字固定但内容会变(引用最新 hash 文件)，必须禁用缓存，
+  // 否则浏览器拿旧 index.html → 加载旧 JS → 看到旧界面(需手动清缓存)
+  app.use(express.static(clientDist, {
+    etag: true,
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      } else if (/[\\/]assets[\\/]/.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }));
+  // SPA 兜底路由：始终返回不缓存的 index.html
   app.get('*', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(path.join(clientDist, 'index.html'));
   });
   console.log(`📦 已启用前端静态资源: ${clientDist}`);

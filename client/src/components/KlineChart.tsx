@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   createChart, IChartApi, ColorType, UTCTimestamp,
-  CandlestickData, HistogramData, LineData, Time,
+  CandlestickData, HistogramData, LineData, Time, LineStyle,
 } from 'lightweight-charts';
 
 interface KlineData {
@@ -34,9 +34,11 @@ function calcSMA(data: number[], period: number): (number | null)[] {
 
 interface Props {
   data: KlineData[];
+  /** 未来计划走势（仅控价图传入做预览，浅色虚线叠加；用户端不传） */
+  planData?: KlineData[];
 }
 
-export default function KlineChart({ data }: Props) {
+export default function KlineChart({ data, planData }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [period, setPeriod] = useState<Period>('intraday');
@@ -52,7 +54,7 @@ export default function KlineChart({ data }: Props) {
     const isIntraday = period === 'intraday';
 
     // Sort & filter — build valid timestamps first
-    const sorted = data
+    const parseSeries = (rows: KlineData[]) => rows
       .filter(d => d.open > 0 && d.close > 0 && d.time_slot)
       .map(d => {
         const parts = d.time_slot.split(' ');
@@ -67,6 +69,8 @@ export default function KlineChart({ data }: Props) {
       })
       .filter(d => !isNaN(d._ts) && d._ts > 0)
       .sort((a, b) => a._ts - b._ts);
+
+    const sorted = parseSeries(data);
 
     const toTimestamp = (ts: number): UTCTimestamp => {
       const v = Math.trunc(ts / 1000);
@@ -168,6 +172,35 @@ export default function KlineChart({ data }: Props) {
 
     chart.timeScale().fitContent();
 
+    // ---- 未来计划预览线（仅控价图）：浅紫虚线，叠加在已发生K线之后 ----
+    if (planData && planData.length > 0) {
+      const planSorted = parseSeries(planData);
+      // 只画「尚未进入真实K线」的计划点（已发生的点已由上方主图呈现）
+      const existingTs = new Set(sorted.map(d => d._ts));
+      const futurePoints = planSorted.filter(d => !existingTs.has(d._ts));
+      if (futurePoints.length > 0) {
+        // 衔接：把最后一根真实K线的收盘点接到预览线起点，避免断开
+        const planLine = chart.addLineSeries({
+          color: '#a78bda',
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: true,
+        });
+        const linePoints: LineData[] = [];
+        const lastReal = sorted[sorted.length - 1];
+        if (lastReal) {
+          linePoints.push({ time: toTimestamp(lastReal._ts), value: lastReal.close });
+        }
+        for (const d of futurePoints) {
+          linePoints.push({ time: toTimestamp(d._ts), value: d.close });
+        }
+        planLine.setData(linePoints);
+        chart.timeScale().fitContent();
+      }
+    }
+
     const handleResize = () => {
       if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
     };
@@ -177,7 +210,7 @@ export default function KlineChart({ data }: Props) {
       chart.remove();
       chartRef.current = null;
     };
-  }, [data, period]);
+  }, [data, planData, period]);
 
   if (data.length === 0) {
     return (
@@ -217,6 +250,14 @@ export default function KlineChart({ data }: Props) {
               <span style={{ color: ma.color }} className="font-medium">{ma.value.toFixed(2)}</span>
             </span>
           ))}
+        </div>
+      )}
+
+      {/* 未来计划预览图例（仅控价图传入 planData 时显示） */}
+      {planData && planData.length > 0 && (
+        <div className="flex items-center gap-1.5 px-3 py-1 bg-purple-50/50 border-b border-purple-100 text-[10px] text-purple-500">
+          <span className="inline-block w-4 border-t-2 border-dashed border-[#a78bda]" />
+          <span>紫色虚线为未来计划走势预览（尚未到点，到点后自动生效）</span>
         </div>
       )}
 

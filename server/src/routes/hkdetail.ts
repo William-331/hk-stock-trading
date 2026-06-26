@@ -14,6 +14,7 @@ function setCache(key: string, data: any) {
   cache.set(key, { data, ts: Date.now() });
 }
 
+
 // ================================================================
 //  GET /api/hk/quote/:code
 //  Real-time quote: Sina (OHLCV + bid/ask) + Tencent (PE/turnover/volRatio)
@@ -36,7 +37,10 @@ router.get('/quote/:code', async (req, res) => {
 
     const tf = tM[1].split('~');
     const tp = (i: number) => parseFloat(tf[i]) || 0;
-    if (tf.length < 34) return res.status(404).json({ error: '未找到该股票' });
+    // 尾部字段位置随接口版本整体平移，以「成交时间戳」为锚点按相对偏移取值。
+    // 头部稳定: [1]名 [3]现价 [4]昨收 [5]今开 [6]量 [9]买一 [19]卖一
+    const T = tf.findIndex((x) => /^\d{4}\/\d{2}\/\d{2}\s/.test(x));
+    if (T < 0 || tf.length < T + 30) return res.status(404).json({ error: '未找到该股票' });
 
     const result: any = {
       code,
@@ -47,19 +51,19 @@ router.get('/quote/:code', async (req, res) => {
       volume: tp(6),
       bid: tp(9),
       ask: tp(19),
-      change: tp(32),
-      changePct: tp(33),
-      high: tp(34),
-      low: tp(35),
-      amount: tp(37),
-      turnover: tp(38) > 0 ? tp(38) : 0,
-      pe: tp(39),
-      amplitude: tp(43),
-      volRatio: tp(49) > 0 ? tp(49) : 0,
-      floatCap: tp(44) > 0 ? Math.round(tp(44) * 1e8) : 0,
-      totalCap: tp(45) > 0 ? Math.round(tp(45) * 1e8) : 0,
-      week52High: tp(47),
-      week52Low: tp(48),
+      change: tp(T + 1),
+      changePct: tp(T + 2),
+      high: tp(T + 3),
+      low: tp(T + 4),
+      amount: tp(T + 7),
+      turnover: tp(T + 29) > 0 ? tp(T + 29) : 0,
+      pe: tp(T + 9),
+      amplitude: tp(T + 13),
+      volRatio: tp(T + 20) > 0 ? tp(T + 20) : 0,
+      floatCap: tp(T + 14) > 0 ? Math.round(tp(T + 14) * 1e8) : 0,
+      totalCap: tp(T + 15) > 0 ? Math.round(tp(T + 15) * 1e8) : 0,
+      week52High: tp(T + 18),
+      week52Low: tp(T + 19),
     };
 
     // 2. 新浪 — 可选补充（成功则用其 52 周高低；Forbidden 直接跳过）

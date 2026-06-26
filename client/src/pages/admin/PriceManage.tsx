@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getKline, setDailyPlan, getPricePlan, adjustPriceSmooth, dailySummary, getLatestPrice, getStockInfo, rebuildPriceRange } from '../../api';
 import KlineChart from '../../components/KlineChart';
-import OrderBook from '../../components/OrderBook';
 
 interface BatchDay {
   date: string;
@@ -29,6 +28,7 @@ export default function PriceManage() {
   const [msg, setMsg] = useState('');
   const [stockInfo, setStockInfo] = useState<any>({ code: '02110.HK', name: '天成控股' });
   const [latestPrice, setLatestPrice] = useState<any>(null);
+  const [planFuture, setPlanFuture] = useState<any[]>([]); // 未来待执行计划点（图上预览）
 
   // ---- 每日设定 ----
   const [dailyDate, setDailyDate] = useState(new Date().toISOString().slice(0, 10));
@@ -58,6 +58,20 @@ export default function PriceManage() {
 
   useEffect(() => { loadData(); }, []);
 
+  // 当前时间格式化为 "YYYY-MM-DD HH:MM"（与 time_slot 一致），用于筛选未来计划点
+  const nowSlot = () => {
+    const n = new Date();
+    const pad = (x: number) => String(x).padStart(2, '0');
+    return `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())} ${pad(n.getHours())}:${pad(n.getMinutes())}`;
+  };
+
+  // 拉取「未来待执行」计划点，作为控价图上的预览虚线
+  const loadPlanFuture = () => {
+    getPricePlan({ from: nowSlot(), status: 'pending' })
+      .then(res => setPlanFuture(res.data || []))
+      .catch(() => setPlanFuture([]));
+  };
+
   const loadData = () => {
     Promise.all([getKline(2000), getLatestPrice(), getStockInfo()])
       .then(([kRes, pRes, sRes]) => {
@@ -67,11 +81,13 @@ export default function PriceManage() {
       })
       .catch(console.error)
       .finally(() => setLoading(false));
+    loadPlanFuture();
   };
 
   const loadKline = () => {
     getKline(2000).then(res => setKline(res.data)).catch(console.error);
     getLatestPrice().then(res => setLatestPrice(res.data)).catch(() => {});
+    loadPlanFuture();
   };
 
   const showMsg = (text: string) => {
@@ -318,9 +334,7 @@ export default function PriceManage() {
                     <span className={`text-[10px] shrink-0 ${p.status === 'executed' ? 'text-green-500' : p.status === 'skipped' ? 'text-gray-400' : 'text-blue-500'}`}>
                       {p.status === 'executed' ? '已执行' : p.status === 'skipped' ? '已跳过' : '待执行'}
                     </span>
-                    {p.status === 'pending' && (
-                      <button onClick={() => handleSlotEdit(p)} className="text-xs text-blue-500 shrink-0">改</button>
-                    )}
+                    <button onClick={() => handleSlotEdit(p)} className="text-xs text-blue-500 shrink-0">改</button>
                   </>
                 )}
               </div>
@@ -365,19 +379,9 @@ export default function PriceManage() {
 
       {msg && <div className="mb-3 px-3 py-2 bg-blue-100 text-blue-700 rounded-lg text-sm">{msg}</div>}
 
-      {/* ---- 左右双栏：走势图 + 五档盘口 ---- */}
-      <div className="flex gap-2 mb-4">
-        <div className="flex-1 min-w-0">
-          <KlineChart data={kline} />
-        </div>
-        <div className="w-44 shrink-0 bg-white rounded-lg border border-gray-200 overflow-hidden">
-          <div className="text-[10px] text-gray-400 px-2 py-1.5 bg-gray-50 border-b border-gray-100">五档盘口</div>
-          <OrderBook
-            buyLevels={latestPrice?.buyLevels || []}
-            sellLevels={latestPrice?.sellLevels || []}
-            prevClose={latestPrice?.prevClose || 0}
-          />
-        </div>
+      {/* ---- 走势图（整宽）---- */}
+      <div className="mb-4">
+        <KlineChart data={kline} planData={planFuture} />
       </div>
 
       {/* Tab */}

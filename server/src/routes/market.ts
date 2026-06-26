@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { httpGetGBK } from '../utils/http';
-import db from '../db';
 
 const router = Router();
 
@@ -32,8 +31,10 @@ function calcChgSpeed(code: string, price: number): number {
   return Math.round((price - oldest.price) / oldest.price * 100 * 100) / 100;
 }
 
-// --------------- 港股列表 (120只) ---------------
+// --------------- 港股列表 (121只) ---------------
 const CODES = [
+  // === 置顶标的 ===
+  '02110',
   // === 科技互联网 (11) ===
   '00700', '09988', '09618', '09888', '01024', '03690', '01810',
   '09999', '00772', '01797', '02013',
@@ -71,8 +72,23 @@ const CODES = [
 ];
 
 // --------------- 腾讯为主源（新浪对海外/云机房返回 Forbidden，不可用） ---------------
-// 腾讯港股字段(~分隔): [1]名 [3]现价 [4]昨收 [5]今开 [6]量 [32]涨跌 [33]涨跌幅
-//                      [34]高 [35]低 [37]额 [38]换手 [39]PE [43]振幅 [44]流通市值(亿) [45]总市值(亿) [49]量比
+// 腾讯港股字段(~分隔)的尾部字段位置会随接口版本整体平移，故以「成交时间戳」(YYYY/MM/DD HH:MM:SS)
+// 为锚点按相对偏移取值，避免硬编码下标因平移而错位。
+// 头部字段位置稳定: [1]名 [3]现价 [4]昨收 [5]今开 [6]量。
+// 相对时间戳 T 的偏移: +1涨跌 +2涨跌幅 +3最高 +4最低 +7成交额 +9市盈率 +13振幅
+//                      +14流通市值(亿) +15总市值(亿) +18=52周高 +19=52周低 +20量比 +29换手率
+function parseTencentHK(f: string[]): {
+  T: number;
+  price: number; prevClose: number; open: number; volume: number;
+  bid: number; ask: number;
+} | null {
+  if (f.length < 32) return null;
+  const T = f.findIndex((x) => /^\d{4}\/\d{2}\/\d{2}\s/.test(x));
+  if (T < 0 || f.length < T + 30) return null;
+  const p = (i: number) => parseFloat(f[i]) || 0;
+  return { T, price: p(3), prevClose: p(4), open: p(5), volume: p(6), bid: p(9), ask: p(19) };
+}
+
 async function fetchTencent(): Promise<any[]> {
   const text = await httpGetGBK(
     `https://qt.gtimg.cn/q=${CODES.map((c) => `hk${c}`).join(',')}`,
@@ -84,13 +100,13 @@ async function fetchTencent(): Promise<any[]> {
     const m = re.exec(text);
     if (!m) continue;
     const f = m[1].split('~');
-    if (f.length < 34) continue;
+    const base = parseTencentHK(f);
+    if (!base) continue;
 
+    const { T, price, open } = base;
     const p = (i: number) => parseFloat(f[i]) || 0;
-    const price = p(3);
-    const open  = p(5);
-    const high  = p(34);
-    const low   = p(35);
+    const high = p(T + 3);
+    const low  = p(T + 4);
 
     results.push({
       code,
@@ -99,16 +115,16 @@ async function fetchTencent(): Promise<any[]> {
       open,
       high,
       low,
-      change:      p(32),
-      changePct:   p(33),
+      change:      p(T + 1),
+      changePct:   p(T + 2),
       chgSpeed:    calcChgSpeed(code, price),
-      turnover:    p(38) > 0 ? p(38) : 0,
-      volRatio:    p(49) > 0 ? p(49) : 0,
-      amplitude:   p(43) > 0 ? p(43) : (open > 0 ? Math.round((high - low) / open * 100 * 100) / 100 : 0),
-      volume:      p(6),
-      amount:      p(37) || 0,
-      floatCap:    p(44) > 0 ? Math.round(p(44) * 1e8) : 0,
-      pe:          p(39),
+      turnover:    p(T + 29) > 0 ? p(T + 29) : 0,
+      volRatio:    p(T + 20) > 0 ? p(T + 20) : 0,
+      amplitude:   p(T + 13) > 0 ? p(T + 13) : (open > 0 ? Math.round((high - low) / open * 100 * 100) / 100 : 0),
+      volume:      base.volume,
+      amount:      p(T + 7) || 0,
+      floatCap:    p(T + 14) > 0 ? Math.round(p(T + 14) * 1e8) : 0,
+      pe:          p(T + 9),
     });
   }
   return results;
@@ -122,35 +138,13 @@ router.get('/hklist', async (_req, res) => {
   try {
     const results = await fetchTencent();
     if (results.length > 0) {
+      // 按代码升序，再把真实标的 02110 置顶
       results.sort((a: any, b: any) => a.code.localeCompare(b.code));
-
-      // 注入 02110.HK 天成控股（内部标的，置顶）
-      try {
-        const latest = db.prepare('SELECT open, high, low, close, volume FROM stock_prices ORDER BY time_slot DESC, id DESC LIMIT 1').get() as any;
-        if (latest) {
-          const prev = db.prepare('SELECT close FROM stock_prices ORDER BY time_slot DESC, id DESC LIMIT 1 OFFSET 1').get() as any;
-          const change = prev ? (latest.close - prev.close) : 0;
-          const changePct = prev ? ((change / prev.close) * 100) : 0;
-          results.unshift({
-            code: '02110',
-            name: '天成控股',
-            price: latest.close,
-            open: latest.open,
-            high: latest.high,
-            low: latest.low,
-            change: Math.round(change * 100) / 100,
-            changePct: Math.round(changePct * 100) / 100,
-            chgSpeed: 0,
-            turnover: 0,
-            volRatio: 0,
-            amplitude: latest.open > 0 ? Math.round(((latest.high - latest.low) / latest.open * 100) * 100) / 100 : 0,
-            volume: latest.volume,
-            amount: Math.round(latest.close * latest.volume * 100) / 100,
-            floatCap: 0,
-            pe: 0,
-          });
-        }
-      } catch {}
+      const pinIdx = results.findIndex((r: any) => r.code === '02110');
+      if (pinIdx > 0) {
+        const [pinned] = results.splice(pinIdx, 1);
+        results.unshift(pinned);
+      }
 
       cache.set('hklist', { data: results, ts: Date.now() });
       return res.json(results);

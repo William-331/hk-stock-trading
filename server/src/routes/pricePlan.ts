@@ -415,12 +415,24 @@ router.put('/:id', requireAuth, requireAdmin, (req: Request, res: Response) => {
 // ================================================================
 //  POST /api/price-plan/adjust-smooth — 改某点价格并平滑带动邻域
 //  Body: { id, close, window? }  window=单侧影响点数(默认6≈半小时)
+//
+//  设计：图表读取的是 stock_prices，价格计划存于 price_plan。逐点改价需
+//  同时写两张表：
+//   - price_plan：始终更新（计划层，后续 cron 据此回填）
+//   - stock_prices：仅对「已到点」(time_slot <= 现在) 的点做 upsert，
+//     这样可见 K 线立即生效；未来未执行的点不提前写入 stock_prices，
+//     避免 /latest 把未来计划价当成实时最新价泄露出去（到点后由 cron 回填）。
+//  允许改写任意状态(含 executed/skipped)的点——用于重塑历史走势。
 // ================================================================
+function nowSlotStr(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
 router.post('/adjust-smooth', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const { id, close, window } = req.body;
   const target = db.prepare('SELECT * FROM price_plan WHERE id = ?').get(id) as any;
   if (!target) return res.status(404).json({ error: '该价格点不存在' });
-  if (target.status !== 'pending') return res.status(400).json({ error: '已执行或已跳过的点不可修改' });
 
   const newClose = Number(close);
   if (!Number.isFinite(newClose) || newClose <= 0) return res.status(400).json({ error: '价格无效' });
@@ -437,38 +449,52 @@ router.post('/adjust-smooth', requireAuth, requireAdmin, (req: Request, res: Res
   if (idx === -1) return res.status(404).json({ error: '定位失败' });
 
   const delta = newClose - target.close;
+  const lo = Math.max(0, idx - W);
+  const hi = Math.min(day.length - 1, idx + W);
 
-  // 1. 邻域按余弦权重分摊 delta（中心=1，边缘→0），仅改 pending 点
+  // 1. 邻域按余弦权重分摊 delta（中心=1，边缘→0）。改写任意点，不再跳过非 pending。
   const newCloses = day.map(p => p.close);
-  for (let j = Math.max(0, idx - W); j <= Math.min(day.length - 1, idx + W); j++) {
-    if (day[j].status !== 'pending') continue;
+  for (let j = lo; j <= hi; j++) {
     const dist = Math.abs(j - idx);
     const weight = W === 0 ? (j === idx ? 1 : 0) : (Math.cos((Math.PI * dist) / W) + 1) / 2;
     newCloses[j] = day[j].close + delta * weight;
   }
   newCloses[idx] = newClose; // 中心点钉死为用户输入值
 
-  // 2. 重算受影响 pending 点的 OHLC：开盘=上一根收盘，保留原振幅特征
-  const update = db.prepare('UPDATE price_plan SET open=?, high=?, low=?, close=? WHERE id=?');
+  // 2. 重算受影响点的 OHLC：开盘=上一根收盘（保 K 线连续），保留原振幅特征
+  const nowStr = nowSlotStr();
+  const updatePlan = db.prepare('UPDATE price_plan SET open=?, high=?, low=?, close=? WHERE id=?');
+  const upsertStock = db.prepare(
+    'INSERT OR REPLACE INTO stock_prices (time_slot, open, high, low, close, volume, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
   let changed = 0;
+  let stockSynced = 0;
   const tx = db.transaction(() => {
-    for (let j = Math.max(0, idx - W); j <= Math.min(day.length - 1, idx + W); j++) {
-      if (day[j].status !== 'pending') continue;
+    for (let j = lo; j <= hi; j++) {
       const c = r2(newCloses[j]);
-      const o = j > 0 ? r2(newCloses[j - 1]) : r2(day[j].open + delta);
+      const o = j > 0 ? r2(newCloses[j - 1]) : r2(day[0].open);
       const highWick = Math.max(0, day[j].high - Math.max(day[j].open, day[j].close));
       const lowWick = Math.max(0, Math.min(day[j].open, day[j].close) - day[j].low);
       const h = r2(Math.max(o, c) + highWick);
       const l = r2(Math.min(o, c) - lowWick);
-      update.run(o, h, l, c, day[j].id);
+
+      updatePlan.run(o, h, l, c, day[j].id);
       changed++;
+
+      // 已到点的才同步进可见 K 线；未来点留给 cron 回填
+      if (day[j].time_slot <= nowStr) {
+        upsertStock.run(day[j].time_slot, o, h, l, c, day[j].volume, day[j].created_by || req.user?.id || 1);
+        stockSynced++;
+      }
     }
   });
   tx();
 
-  logOperation(req.user!.id, req.user!.username, 'adjust_price_smooth',
-    `${target.time_slot} 改为 ${newClose}，平滑带动 ${changed} 个点`);
-  res.json({ message: `已调整，平滑带动 ${changed} 个点`, changed });
+  try {
+    logOperation(req.user!.id, req.user!.username, 'adjust_price_smooth',
+      `${target.time_slot} 改为 ${newClose}，平滑带动 ${changed} 个计划点，同步 ${stockSynced} 个K线点`);
+  } catch { /* 写操作日志失败不应影响改价结果 */ }
+  res.json({ message: `已调整，平滑带动 ${changed} 个点（${stockSynced} 个已同步到K线）`, changed, stockSynced });
 });
 
 

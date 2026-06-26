@@ -31,10 +31,8 @@ function calcChgSpeed(code: string, price: number): number {
   return Math.round((price - oldest.price) / oldest.price * 100 * 100) / 100;
 }
 
-// --------------- 港股列表 (121只) ---------------
+// --------------- 港股列表 (120只) ---------------
 const CODES = [
-  // === 置顶标的 ===
-  '02110',
   // === 科技互联网 (11) ===
   '00700', '09988', '09618', '09888', '01024', '03690', '01810',
   '09999', '00772', '01797', '02013',
@@ -138,13 +136,7 @@ router.get('/hklist', async (_req, res) => {
   try {
     const results = await fetchTencent();
     if (results.length > 0) {
-      // 按代码升序，再把真实标的 02110 置顶
       results.sort((a: any, b: any) => a.code.localeCompare(b.code));
-      const pinIdx = results.findIndex((r: any) => r.code === '02110');
-      if (pinIdx > 0) {
-        const [pinned] = results.splice(pinIdx, 1);
-        results.unshift(pinned);
-      }
 
       cache.set('hklist', { data: results, ts: Date.now() });
       return res.json(results);

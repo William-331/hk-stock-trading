@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import compression from 'compression';
 import path from 'path';
 import cors from 'cors';
 import cron, { ScheduledTask } from 'node-cron';
@@ -20,6 +21,7 @@ import { requireAuth, requireAdmin } from './middleware/auth';
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 
+app.use(compression()); // gzip 压缩响应(前端 JS 464KB → ~144KB, 大幅降低传输量)
 app.use(cors());
 app.use(express.json());
 

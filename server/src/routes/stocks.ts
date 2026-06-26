@@ -4,20 +4,41 @@ import { requireAuth, requireAdmin } from '../middleware/auth';
 
 const router = Router();
 
+// 合法 time_slot 形如 "YYYY-MM-DD HH:MM"（GLOB 过滤掉历史脏数据）
+const SLOT_GLOB = '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]';
+
+// 交易时段过滤：只保留 09:30-12:00 与 13:00-16:00 的点（substr(time_slot,12,5)=HH:MM）
+// 排除早期种子数据里 16:13/17:03 这类非交易时段、时间不规整的点
+const TRADING_HOURS_SQL =
+  "((substr(time_slot,12,5) >= '09:30' AND substr(time_slot,12,5) <= '12:00') " +
+  "OR (substr(time_slot,12,5) >= '13:00' AND substr(time_slot,12,5) <= '16:00'))";
+
+// 行情读取统一过滤：格式合法 + 交易时段内 + 不晚于当前时间（绝不显示未来计划走势）
+const VALID_SLOT_SQL = `time_slot GLOB ? AND ${TRADING_HOURS_SQL} AND time_slot <= ?`;
+
+// 当前北京时间格式化为 "YYYY-MM-DD HH:MM"，用于严格按时间截断（不显示未来计划点）
+function nowSlot(): string {
+  const n = new Date();
+  const pad = (x: number) => String(x).padStart(2, '0');
+  return `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())} ${pad(n.getHours())}:${pad(n.getMinutes())}`;
+}
+
 // 获取 K 线数据（价格时间序列）
+// 严格：只返回格式合法、交易时段内、且 time_slot <= 当前时间的点
 router.get('/kline', (req: Request, res: Response) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 1000, 1), 5000);
   const prices = db.prepare(
-    'SELECT open, high, low, close, volume, time_slot, created_at FROM stock_prices ORDER BY time_slot ASC LIMIT ?'
-  ).all(limit);
+    `SELECT open, high, low, close, volume, time_slot, created_at FROM stock_prices WHERE ${VALID_SLOT_SQL} ORDER BY time_slot ASC LIMIT ?`
+  ).all(SLOT_GLOB, nowSlot(), limit);
   res.json(prices);
 });
 
 // 获取最新价格
 router.get('/latest', (_req: Request, res: Response) => {
+  const now = nowSlot();
   const latest = db.prepare(
-    'SELECT open, high, low, close, volume, time_slot FROM stock_prices ORDER BY time_slot DESC, id DESC LIMIT 1'
-  ).get() as any;
+    `SELECT open, high, low, close, volume, time_slot FROM stock_prices WHERE ${VALID_SLOT_SQL} ORDER BY time_slot DESC, id DESC LIMIT 1`
+  ).get(SLOT_GLOB, now) as any;
 
   if (!latest) {
     return res.json({ open: 10.0, high: 10.0, low: 10.0, close: 10.0, volume: 0 });
@@ -25,8 +46,8 @@ router.get('/latest', (_req: Request, res: Response) => {
 
   // 涨跌幅（与上一根比较）
   const prev = db.prepare(
-    'SELECT close FROM stock_prices ORDER BY time_slot DESC, id DESC LIMIT 1 OFFSET 1'
-  ).get() as any;
+    `SELECT close FROM stock_prices WHERE ${VALID_SLOT_SQL} ORDER BY time_slot DESC, id DESC LIMIT 1 OFFSET 1`
+  ).get(SLOT_GLOB, now) as any;
 
   const change = prev ? (latest.close - prev.close) : 0;
   const changePct = prev ? ((change / prev.close) * 100) : 0;

@@ -350,7 +350,9 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
 
       for (const row of uniquePlanRows) {
         insertPlan.run(row.time_slot, row.open, row.high, row.low, row.close, row.volume, 'pending', req.user?.id || 1);
-        if (applyToStockPrices) {
+        // 只把「已到点」的写进真实 K 线，未来点留给 cron 到点回填，
+        // 保证用户行情严格按时间显示、不提前出现未来走势
+        if (applyToStockPrices && row.time_slot <= nowSlotStr()) {
           insertStock.run(row.time_slot, row.open, row.high, row.low, row.close, row.volume, req.user?.id || 1);
         }
       }

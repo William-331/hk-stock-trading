@@ -37,6 +37,7 @@ export const changePassword = (oldPassword: string, newPassword: string) =>
 // Stock / K-line
 export const getKline = (limit = 1000) => api.get('/stocks/kline', { params: { limit } });
 export const getLatestPrice = () => api.get('/stocks/latest');
+export const getTrades = (limit = 30) => api.get('/stocks/trades', { params: { limit } });
 export const addPrice = (data: any) => api.post('/stocks/add', data);
 export const batchAddPrice = (prices: any[]) => api.post('/stocks/batch', { prices });
 

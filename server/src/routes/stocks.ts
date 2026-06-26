@@ -52,28 +52,18 @@ router.get('/latest', (_req: Request, res: Response) => {
   const change = prev ? (latest.close - prev.close) : 0;
   const changePct = prev ? ((change / prev.close) * 100) : 0;
 
-  // 生成五档盘口（基于最新价推导）
-  const price = latest.close;
-  const tickSize =
-    price >= 500 ? 0.5 : price >= 100 ? 0.1 : price >= 10 ? 0.02 : 0.01;
-  const volBase = (latest.volume || 1000) * 0.0001;
-  const bid = parseFloat((price - tickSize).toFixed(3));
-  const ask = parseFloat((price + tickSize).toFixed(3));
-  const buyLevels: { price: number; volume: number }[] = [];
-  const sellLevels: { price: number; volume: number }[] = [];
+  // 五档盘口：聚合真实的待审核(pending)订单
+  // 买盘按价格从高到低(买1=最高买价)，卖盘按价格从低到高(卖1=最低卖价)
+  const buyLevels = db.prepare(
+    "SELECT price, SUM(quantity) AS volume FROM orders WHERE status='pending' AND type='buy' GROUP BY price ORDER BY price DESC LIMIT 5"
+  ).all() as { price: number; volume: number }[];
+  const sellLevels = db.prepare(
+    "SELECT price, SUM(quantity) AS volume FROM orders WHERE status='pending' AND type='sell' GROUP BY price ORDER BY price ASC LIMIT 5"
+  ).all() as { price: number; volume: number }[];
 
-  for (let i = 0; i < 5; i++) {
-    const bp = parseFloat((bid - tickSize * i).toFixed(3));
-    buyLevels.push({
-      price: bp > 0 ? bp : bid,
-      volume: Math.round(volBase * (6 - i) * (0.8 + Math.random() * 0.4)),
-    });
-    const sp = parseFloat((ask + tickSize * i).toFixed(3));
-    sellLevels.push({
-      price: sp > 0 ? sp : ask,
-      volume: Math.round(volBase * (6 - i) * (0.8 + Math.random() * 0.4)),
-    });
-  }
+  // 买一/卖一：取真实盘口最优价，无挂单则回退到最新价
+  const bid = buyLevels[0]?.price || latest.close;
+  const ask = sellLevels[0]?.price || latest.close;
 
   res.json({
     ...latest,
@@ -85,6 +75,15 @@ router.get('/latest', (_req: Request, res: Response) => {
     buyLevels,
     sellLevels,
   });
+});
+
+// 最近成交明细（真实成交，读 trade_records；脱敏，不返回用户信息）
+router.get('/trades', (req: Request, res: Response) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
+  const rows = db.prepare(
+    'SELECT type, quantity, price, amount, created_at FROM trade_records ORDER BY created_at DESC, id DESC LIMIT ?'
+  ).all(limit);
+  res.json(rows);
 });
 
 // 后台：添加价格点（每10分钟）

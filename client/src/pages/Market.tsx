@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getKline, getLatestPrice, getStockInfo } from '../api';
+import { getKline, getLatestPrice, getStockInfo, getTrades } from '../api';
 import KlineChart from '../components/KlineChart';
 import OrderBook from '../components/OrderBook';
 
@@ -55,6 +55,7 @@ export default function Market() {
 
   const [kline, setKline] = useState<any[]>([]);
   const [price, setPrice] = useState<PriceData | null>(null);
+  const [trades, setTrades] = useState<any[]>([]);
   const [stockInfo, setStockInfo] = useState<StockInfo>({ code: '02110.HK', name: '天成控股' });
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'orderbook' | 'trades'>('orderbook');
@@ -71,10 +72,13 @@ export default function Market() {
       .catch(console.error)
       .finally(() => setLoading(false));
 
+    getTrades().then(tRes => setTrades(tRes.data || [])).catch(() => {});
+
     // Poll every 30s
     const timer = setInterval(() => {
       getLatestPrice().then(pRes => setPrice(pRes.data)).catch(() => {});
       getKline().then(kRes => setKline(kRes.data || [])).catch(() => {});
+      getTrades().then(tRes => setTrades(tRes.data || [])).catch(() => {});
     }, 30000);
     return () => clearInterval(timer);
   }, []);
@@ -100,9 +104,6 @@ export default function Market() {
   ];
 
   const quickTags = ['日内高低点', '顶底猎手', '择时决策', '涨停先锋', '神奇九转', '事件'];
-
-  // Last 30 kline entries as simulated trade records
-  const tradeRecords = kline.slice(-30).reverse();
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] pb-20">
@@ -212,24 +213,29 @@ export default function Market() {
           />
         ) : (
           <div className="max-h-80 overflow-y-auto">
-            {tradeRecords.length === 0 ? (
+            {trades.length === 0 ? (
               <div className="py-8 text-center text-xs text-gray-400">暂无成交数据</div>
             ) : (
               <div className="text-[11px]">
                 <div className="flex px-3 py-1.5 bg-gray-50 text-gray-400 font-medium">
-                  <span className="w-28">时间</span>
+                  <span className="w-32">时间</span>
+                  <span className="w-10">方向</span>
                   <span className="flex-1 text-right">价格</span>
-                  <span className="flex-1 text-right">成交量</span>
+                  <span className="flex-1 text-right">数量</span>
                 </div>
-                {tradeRecords.map((t, i) => (
-                  <div key={i} className="flex px-3 py-1.5 border-b border-gray-50 tabular-nums">
-                    <span className="w-28 text-gray-500">{t.time_slot}</span>
-                    <span className={`flex-1 text-right font-medium ${t.close >= t.open ? 'text-[#e15241]' : 'text-[#47b262]'}`}>
-                      {fmt(t.close)}
-                    </span>
-                    <span className="flex-1 text-right text-gray-500">{t.volume?.toLocaleString() || '-'}</span>
-                  </div>
-                ))}
+                {trades.map((t, i) => {
+                  const isBuy = t.type === 'buy';
+                  return (
+                    <div key={i} className="flex px-3 py-1.5 border-b border-gray-50 tabular-nums">
+                      <span className="w-32 text-gray-500">{(t.created_at || '').replace('T', ' ').slice(0, 19)}</span>
+                      <span className={`w-10 font-medium ${isBuy ? 'text-[#e15241]' : 'text-[#47b262]'}`}>{isBuy ? '买' : '卖'}</span>
+                      <span className={`flex-1 text-right font-medium ${isBuy ? 'text-[#e15241]' : 'text-[#47b262]'}`}>
+                        {fmt(t.price)}
+                      </span>
+                      <span className="flex-1 text-right text-gray-500">{t.quantity?.toLocaleString() || '-'}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

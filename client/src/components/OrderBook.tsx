@@ -38,9 +38,9 @@ export default function OrderBook({ buyLevels, sellLevels, prevClose }: Props) {
 
   return (
     <div className="text-[11px]">
-      {/* ---- Sell levels (5 → 1) ---- */}
+      {/* ---- Sell levels (高 → 低, 卖N 在最上, 卖1 在最下) ---- */}
       {sellLevels.slice().reverse().map((lvl, i) => {
-        const idx = 5 - i;
+        const idx = sellLevels.length - i;
         const isUp = lvl.price >= prevClose;
         const priceCls = isUp ? 'text-[#e15241]' : 'text-[#47b262]';
         const barW = Math.max(4, Math.round((lvl.volume / maxVol) * 80));

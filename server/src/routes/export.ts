@@ -232,7 +232,9 @@ router.post('/daily-summary', requireAuth, async (req: Request, res: Response) =
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
   const { date } = req.body;
-  const dateStr = date || new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const pad = (x: number) => String(x).padStart(2, '0');
+  const dateStr = date || `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 
   const trades = db.prepare('SELECT tr.*, u.username, u.real_name FROM trade_records tr JOIN users u ON u.id = tr.user_id WHERE tr.created_at >= ? AND tr.created_at <= ? ORDER BY tr.created_at DESC').all(dateStr, dateStr + ' 23:59:59') as any[];
   const prices = db.prepare("SELECT * FROM stock_prices WHERE time_slot LIKE ? ORDER BY time_slot ASC").all(dateStr + '%') as any[];

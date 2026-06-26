@@ -36,6 +36,12 @@ function isWeekend(dateStr: string): boolean {
   return d.getDay() === 0 || d.getDay() === 6;
 }
 
+// 本地日期格式化为 YYYY-MM-DD（不要用 toISOString，那是 UTC 会在东八区偏成前一天）
+function toLocalDate(d: Date): string {
+  const pad = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 // 判断时间是否在交易时段外（午休12:00-13:00可以存12:00，跳过12:05-12:55）
 function isTradingTime(timeStr: string): boolean {
   const hh = parseInt(timeStr.split(' ')[1].split(':')[0], 10);
@@ -225,7 +231,7 @@ router.post('/batch', requireAuth, requireAdmin, (req: Request, res: Response) =
     const tx = db.transaction(() => {
       const current = new Date(start);
       while (current <= end) {
-        const dateStr = current.toISOString().slice(0, 10);
+        const dateStr = toLocalDate(current);
         if (!isWeekend(dateStr)) {
           const slots = tradingSlots(dateStr).filter(isTradingTime);
           const series = generateDaySeries(Number(open), Number(close), slots.length);
@@ -277,7 +283,7 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
 
   const current = new Date(start);
   while (current <= end) {
-    const dateStr = current.toISOString().slice(0, 10);
+    const dateStr = toLocalDate(current);
     const isWk = isWeekend(dateStr);
     const input = dayMap.get(dateStr);
 

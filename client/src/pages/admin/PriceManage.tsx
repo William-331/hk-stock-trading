@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { getKline, setDailyPlan, getPricePlan, adjustPriceSmooth, dailySummary, getLatestPrice, getStockInfo, rebuildPriceRange } from '../../api';
 import KlineChart from '../../components/KlineChart';
 
+// 本地日期格式化为 YYYY-MM-DD（不要用 toISOString，那是 UTC 会在东八区凌晨偏成前一天）
+function toLocalDate(d: Date): string {
+  const pad = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 interface BatchDay {
   date: string;
   isWeekend: boolean;
@@ -31,7 +37,7 @@ export default function PriceManage() {
   const [planFuture, setPlanFuture] = useState<any[]>([]); // 未来待执行计划点（图上预览）
 
   // ---- 每日设定 ----
-  const [dailyDate, setDailyDate] = useState(new Date().toISOString().slice(0, 10));
+  const [dailyDate, setDailyDate] = useState(toLocalDate(new Date()));
   const [dailyOpen, setDailyOpen] = useState('');
   const [dailyClose, setDailyClose] = useState('');
   const [dailyVolUp, setDailyVolUp] = useState('1.0');
@@ -150,7 +156,7 @@ export default function PriceManage() {
     const days: BatchDay[] = [];
     const cur = new Date(start);
     while (cur <= end) {
-      const ds = cur.toISOString().slice(0, 10);
+      const ds = toLocalDate(cur);
       const wk = isWeekend(ds);
       days.push({ date: ds, isWeekend: wk, open: '', close: '', volUp: '1.0', volDown: '1.0' });
       cur.setDate(cur.getDate() + 1);
@@ -250,7 +256,7 @@ export default function PriceManage() {
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `daily_summary_${new Date().toISOString().slice(0,10).replace(/-/g,'')}.xlsx`;
+      a.download = `daily_summary_${toLocalDate(new Date()).replace(/-/g,'')}.xlsx`;
       a.click();
       window.URL.revokeObjectURL(url);
       showMsg('每日汇总已下载');

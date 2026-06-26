@@ -77,10 +77,16 @@ export default function HKDetail() {
     if (!code) return;
     let cancelled = false;
 
-    const fetchQuote = () => {
+    // 切换股票时回到加载态，避免在旧数据/空数据上先闪“未找到”
+    setLoading(true);
+    setQuote(null);
+    setError('');
+
+    const fetchQuote = (initial = false) => {
       getHKQuote(code)
         .then(res => { if (!cancelled) { setQuote(res.data); setError(''); } })
-        .catch(() => { if (!cancelled) setError('行情加载失败'); });
+        .catch(() => { if (!cancelled) setError('行情加载失败'); })
+        .finally(() => { if (!cancelled && initial) setLoading(false); });
     };
 
     const fetchTrades = () => {
@@ -94,9 +100,9 @@ export default function HKDetail() {
         .catch(() => {});
     };
 
-    fetchQuote();
+    // 首次加载：loading 在 quote 请求有结果后才关闭
+    fetchQuote(true);
     fetchTrades();
-    setLoading(false);
 
     const timer = setInterval(() => { fetchQuote(); fetchTrades(); }, 5000);
     return () => { cancelled = true; clearInterval(timer); };
@@ -119,7 +125,8 @@ export default function HKDetail() {
     );
   }
 
-  if (error || !quote) {
+  // 仅在「尚无任何行情数据」时才显示错误页；已有数据时轮询偶发失败不应清空页面
+  if (!quote) {
     return (
       <div className="min-h-screen bg-[#f0f2f5] flex flex-col items-center justify-center gap-3">
         <span className="text-3xl">📡</span>

@@ -80,7 +80,11 @@ export default function KlineChart({ data, planData }: Props) {
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
       height: 400,
-      layout: { background: { type: ColorType.Solid, color: '#ffffff' }, textColor: '#666' },
+      layout: {
+        background: { type: ColorType.Solid, color: '#ffffff' },
+        textColor: '#666',
+        attributionLogo: false, // 关闭右下角 TradingView 水印 logo
+      },
       grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
       crosshair: { mode: 1 },
       timeScale: { borderColor: '#e8e8e8', timeVisible: true, secondsVisible: false },

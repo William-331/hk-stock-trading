@@ -51,7 +51,11 @@ export default function HKChart({ code }: Props) {
     const chart = createChart(container, {
       width: container.clientWidth,
       height,
-      layout: { background: { type: ColorType.Solid, color: '#ffffff' }, textColor: '#666' },
+      layout: {
+        background: { type: ColorType.Solid, color: '#ffffff' },
+        textColor: '#666',
+        attributionLogo: false, // 关闭右下角 TradingView 水印 logo
+      },
       grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
       crosshair: { mode: 1 },
       timeScale: {

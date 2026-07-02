@@ -99,6 +99,8 @@ export const exportUsers = (params?: any) =>
   api.get('/export/users', { params, responseType: 'blob' });
 export const exportTradesWord = (params?: any) =>
   api.get('/export/trades-word', { params, responseType: 'blob' });
+export const exportTradesCsv = (params?: any) =>
+  api.get('/export/trades-csv', { params, responseType: 'blob' });
 export const exportAuditWord = () =>
   api.get('/export/audit-word', { responseType: 'blob' });
 export const backupTrades = () => api.post('/export/backup');

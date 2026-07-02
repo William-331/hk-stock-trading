@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  getTradeRecords, exportTrades, exportTradesWord, exportAudit, exportAuditWord,
+  getTradeRecords, exportTrades, exportTradesWord, exportTradesCsv, exportAudit, exportAuditWord,
   backupTrades, getBackupList, downloadBackup, getSettings, updateSettings, getStockInfo,
 } from '../../api';
 
@@ -32,7 +32,7 @@ export default function TradeRecords() {
   const doExport = (fn: Function, label: string) => async () => {
     try {
       const res = await fn();
-      const ext = label.includes('Word') ? '.docx' : '.xlsx';
+      const ext = label.includes('Word') ? '.docx' : label.includes('CSV') ? '.csv' : '.xlsx';
       const blob = new Blob([res.data]);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -96,6 +96,7 @@ export default function TradeRecords() {
         <h1 className="text-xl font-bold">交易记录</h1>
         <div className="flex gap-1 flex-wrap justify-end">
           <button onClick={doExport(exportTrades, '交易记录Excel')} className="px-2 py-1.5 bg-blue-600 text-white rounded text-xs font-medium">Excel</button>
+          <button onClick={doExport(exportTradesCsv, '交易记录CSV')} className="px-2 py-1.5 bg-teal-600 text-white rounded text-xs font-medium">CSV</button>
           <button onClick={doExport(exportTradesWord, '交易记录Word')} className="px-2 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium">Word</button>
           <button onClick={handleBackup} className="px-2 py-1.5 bg-green-600 text-white rounded text-xs font-medium">备份</button>
           <button onClick={loadBackups} className="px-2 py-1.5 bg-gray-600 text-white rounded text-xs font-medium">历史</button>

@@ -1,10 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 
-// 优先读环境变量(生产环境务必通过 JWT_SECRET 注入随机密钥);本地开发回退到默认值
-const JWT_SECRET = process.env.JWT_SECRET || 'stock-trading-2024-secret-key';
-if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
-  console.warn('⚠️  生产环境未设置 JWT_SECRET 环境变量,正在使用默认密钥(不安全)!');
+// 优先读环境变量 JWT_SECRET。未设置时不再回退到硬编码密钥(硬编码密钥人人可知,
+// 会被用来伪造管理员 token),而是启动时随机生成一个。
+// 代价:服务重启后旧 token 全部失效(用户需重新登录),对本项目可接受。
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+if (!process.env.JWT_SECRET) {
+  console.warn('⚠️  未设置 JWT_SECRET 环境变量,已随机生成本次运行的密钥(重启后需重新登录)。生产环境建议通过环境变量固定注入。');
 }
 
 export interface AuthUser {

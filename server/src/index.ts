@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
 import compression from 'compression';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import path from 'path';
 import cors from 'cors';
 import cron, { ScheduledTask } from 'node-cron';
@@ -21,9 +23,42 @@ import { requireAuth, requireAdmin } from './middleware/auth';
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 
+// 反向代理(nginx 等)后要信任代理头,否则限流会把所有请求当成同一个 IP
+app.set('trust proxy', 1);
+
+// 安全响应头(防点击劫持、MIME 嗅探、XSS 等)。
+// 前端是同源静态资源,关闭 CSP 以免误伤内联脚本/图表库,其余默认防护保留。
+app.use(helmet({ contentSecurityPolicy: false }));
+
 app.use(compression()); // gzip 压缩响应(前端 JS 464KB → ~144KB, 大幅降低传输量)
-app.use(cors());
-app.use(express.json());
+
+// CORS:生产环境通过 CORS_ORIGIN 环境变量限定来源(逗号分隔);未设置时回退放开(本地开发)
+const corsOrigins = process.env.CORS_ORIGIN?.split(',').map(s => s.trim()).filter(Boolean);
+app.use(cors(corsOrigins && corsOrigins.length ? { origin: corsOrigins } : undefined));
+
+app.use(express.json({ limit: '1mb' })); // 限制请求体大小,防止超大 payload 拖垮服务
+
+// 全局限流:抵御一般性 DoS / 请求洪水。每 IP 15 分钟最多 1000 次。
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '请求过于频繁,请稍后再试' },
+});
+app.use('/api', globalLimiter);
+
+// 登录/注册严格限流:抵御暴力破解。每 IP 15 分钟最多 10 次失败尝试(成功不计数)。
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '登录尝试次数过多,请 15 分钟后再试' },
+});
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
 
 // 初始化数据库
 initDB();

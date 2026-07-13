@@ -87,8 +87,30 @@ export default function KlineChart({ data, planData }: Props) {
       },
       grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
       crosshair: { mode: 1 },
-      timeScale: { borderColor: '#e8e8e8', timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: '#e8e8e8',
+        timeVisible: true,
+        secondsVisible: false,
+        // 时间轴刻度显示为「年/月/日」（时间戳用 Date.UTC 构造，故用 UTC 取值）
+        tickMarkFormatter: (time: UTCTimestamp) => {
+          const d = new Date((time as number) * 1000);
+          const y = d.getUTCFullYear();
+          const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(d.getUTCDate()).padStart(2, '0');
+          return `${y}/${m}/${day}`;
+        },
+      },
       rightPriceScale: { borderColor: '#e8e8e8' },
+      // 十字光标浮层的时间也显示为「年 月 日」
+      localization: {
+        timeFormatter: (time: UTCTimestamp) => {
+          const d = new Date((time as number) * 1000);
+          const y = d.getUTCFullYear();
+          const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(d.getUTCDate()).padStart(2, '0');
+          return `${y}年${m}月${day}日`;
+        },
+      },
     });
     chartRef.current = chart;
 

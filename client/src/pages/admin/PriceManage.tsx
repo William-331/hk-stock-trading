@@ -40,6 +40,8 @@ export default function PriceManage() {
   const [dailyDate, setDailyDate] = useState(toLocalDate(new Date()));
   const [dailyOpen, setDailyOpen] = useState('');
   const [dailyClose, setDailyClose] = useState('');
+  const [dailyHigh, setDailyHigh] = useState('');
+  const [dailyLow, setDailyLow] = useState('');
   const [dailyVolUp, setDailyVolUp] = useState('1.0');
   const [dailyVolDown, setDailyVolDown] = useState('1.0');
 
@@ -137,9 +139,16 @@ export default function PriceManage() {
 
   const handleDaily = async () => {
     if (!dailyDate || !dailyOpen || !dailyClose) { showMsg('请填写完整信息'); return; }
+    // 若填了最高/最低价，做前端预校验，避免提交后才报错
+    const highN = dailyHigh ? Number(dailyHigh) : undefined;
+    const lowN = dailyLow ? Number(dailyLow) : undefined;
+    if (highN !== undefined && lowN !== undefined && highN < lowN) { showMsg('当日最高价不能低于最低价'); return; }
+    if (highN !== undefined && (Number(dailyOpen) > highN || Number(dailyClose) > highN)) { showMsg('开盘价/收盘价不能高于当日最高价'); return; }
+    if (lowN !== undefined && (Number(dailyOpen) < lowN || Number(dailyClose) < lowN)) { showMsg('开盘价/收盘价不能低于当日最低价'); return; }
     try {
       const res = await setDailyPlan({
         date: dailyDate, open: Number(dailyOpen), close: Number(dailyClose),
+        high: highN, low: lowN,
         volUp: Number(dailyVolUp), volDown: Number(dailyVolDown),
       });
       showMsg((res.data as any).message);
@@ -418,6 +427,18 @@ export default function PriceManage() {
               <label className="text-xs text-gray-500">收盘价</label>
               <input type="number" step="0.01" value={dailyClose} onChange={e => setDailyClose(e.target.value)}
                 placeholder="如 13.00" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-gray-500">当日最高价</label>
+              <input type="number" step="0.01" value={dailyHigh} onChange={e => setDailyHigh(e.target.value)}
+                placeholder="选填，如 13.20" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500">当日最低价</label>
+              <input type="number" step="0.01" value={dailyLow} onChange={e => setDailyLow(e.target.value)}
+                placeholder="选填，如 12.30" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">

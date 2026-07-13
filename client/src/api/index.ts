@@ -43,7 +43,7 @@ export const batchAddPrice = (prices: any[]) => api.post('/stocks/batch', { pric
 
 // Price Plan
 export const getPricePlan = (params?: any) => api.get('/price-plan', { params });
-export const setDailyPlan = (data: { date: string; open: number; close: number; volUp?: number; volDown?: number }) =>
+export const setDailyPlan = (data: { date: string; open: number; close: number; high?: number; low?: number; volUp?: number; volDown?: number }) =>
   api.post('/price-plan/daily', data);
 export const setBatchPlan = (data: { from: string; to: string; open: number; close: number }) =>
   api.post('/price-plan/batch', data);

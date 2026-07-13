@@ -59,9 +59,15 @@ function generateDaySeries(
   total: number,
   volUp = 1.0,
   volDown = 1.0,
+  dayHigh?: number,
+  dayLow?: number,
 ): Array<{ open: number; high: number; low: number; close: number; volume: number }> {
   if (total <= 0) return [];
   const r2 = (n: number) => Math.round(n * 100) / 100;
+
+  // 是否指定了当日最高/最低价（作为整日的硬性包络）
+  const hasHigh = dayHigh !== undefined && Number.isFinite(dayHigh) && dayHigh > 0;
+  const hasLow = dayLow !== undefined && Number.isFinite(dayLow) && dayLow > 0;
 
   // 1. 基线：open -> close 的线性插值（每个点的收盘锚点）
   const baseAt = (i: number) => {
@@ -98,14 +104,42 @@ function generateDaySeries(
   closes[0] = openPrice;
   closes[total - 1] = closePrice;
 
+  // 3.5 若指定了当日最高/最低价，把所有收盘价夹进 [dayLow, dayHigh] 区间，
+  //     再挑波动最大的两个点分别顶到 dayHigh / dayLow，保证当日确实触及这两个极值。
+  if (hasHigh || hasLow) {
+    const hi = hasHigh ? dayHigh! : Infinity;
+    const lo = hasLow ? dayLow! : -Infinity;
+    for (let i = 0; i < total; i++) {
+      if (closes[i] > hi) closes[i] = hi;
+      if (closes[i] < lo) closes[i] = lo;
+    }
+    // 端点也不能越界（open/close 若超出给定高低，同样夹住）
+    closes[0] = Math.min(Math.max(closes[0], lo), hi);
+    closes[total - 1] = Math.min(Math.max(closes[total - 1], lo), hi);
+    // 让最高点/最低点真正落在盘中（首尾之外），避免极值退化为开/收盘
+    if (hasHigh && total > 2) {
+      let maxIdx = 1;
+      for (let i = 2; i < total - 1; i++) if (closes[i] > closes[maxIdx]) maxIdx = i;
+      closes[maxIdx] = dayHigh!;
+    }
+    if (hasLow && total > 2) {
+      let minIdx = 1;
+      for (let i = 2; i < total - 1; i++) if (closes[i] < closes[minIdx]) minIdx = i;
+      closes[minIdx] = dayLow!;
+    }
+  }
+
   // 4. 组装 OHLC：开盘=上一根收盘（首根=openPrice），高低在开收之间外扩小幅
   const series = [];
   for (let i = 0; i < total; i++) {
     const o = i === 0 ? openPrice : closes[i - 1];
     const c = r2(closes[i]);
     const wick = avgBase * (Math.max(volUp, volDown) / 100) * 0.15 * Math.random();
-    const h = r2(Math.max(o, c) + wick);
-    const l = r2(Math.min(o, c) - wick);
+    let h = r2(Math.max(o, c) + wick);
+    let l = r2(Math.min(o, c) - wick);
+    // 影线不得突破当日给定的最高/最低价
+    if (hasHigh) h = r2(Math.min(h, dayHigh!));
+    if (hasLow) l = r2(Math.max(l, dayLow!));
     const v = Math.floor(Math.random() * 5000) + 2000;
     series.push({ open: r2(o), high: h, low: l, close: c, volume: v });
   }
@@ -170,7 +204,7 @@ router.get('/', requireAuth, (req: Request, res: Response) => {
 //  Body: { date, open, close, volUp?, volDown? }
 // ================================================================
 router.post('/daily', requireAuth, requireAdmin, (req: Request, res: Response) => {
-  const { date, open, close, volUp, volDown } = req.body;
+  const { date, open, close, volUp, volDown, high, low } = req.body;
   if (!date || !open || !close) {
     return res.status(400).json({ error: '日期、开盘价、收盘价必填' });
   }
@@ -187,12 +221,32 @@ router.post('/daily', requireAuth, requireAdmin, (req: Request, res: Response) =
   const up = volUp !== undefined ? Number(volUp) : 1.0;
   const down = volDown !== undefined ? Number(volDown) : 1.0;
 
+  // 当日最高/最低价（可选）。若填写则校验区间合法性
+  const dayHigh = high !== undefined && high !== '' ? Number(high) : undefined;
+  const dayLow = low !== undefined && low !== '' ? Number(low) : undefined;
+  if (dayHigh !== undefined && (!Number.isFinite(dayHigh) || dayHigh <= 0)) {
+    return res.status(400).json({ error: '当日最高价无效' });
+  }
+  if (dayLow !== undefined && (!Number.isFinite(dayLow) || dayLow <= 0)) {
+    return res.status(400).json({ error: '当日最低价无效' });
+  }
+  if (dayHigh !== undefined && dayLow !== undefined && dayHigh < dayLow) {
+    return res.status(400).json({ error: '当日最高价不能低于最低价' });
+  }
+  const o = Number(open), c = Number(close);
+  if (dayHigh !== undefined && (o > dayHigh || c > dayHigh)) {
+    return res.status(400).json({ error: '开盘价/收盘价不能高于当日最高价' });
+  }
+  if (dayLow !== undefined && (o < dayLow || c < dayLow)) {
+    return res.status(400).json({ error: '开盘价/收盘价不能低于当日最低价' });
+  }
+
   const insert = db.prepare(
     'INSERT OR REPLACE INTO price_plan (time_slot, open, high, low, close, volume, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   );
 
   try {
-    const series = generateDaySeries(Number(open), Number(close), slots.length, up, down);
+    const series = generateDaySeries(Number(open), Number(close), slots.length, up, down, dayHigh, dayLow);
     const tx = db.transaction(() => {
       for (let i = 0; i < slots.length; i++) {
         const p = series[i];

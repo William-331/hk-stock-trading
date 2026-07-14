@@ -259,21 +259,9 @@ export default function Market() {
           </button>
           <button
             onClick={() => navigate('/my-orders')}
-            className="flex-1 py-3 text-xs text-gray-600 bg-white hover:bg-gray-50 active:scale-95 transition"
+            className="flex-1 py-3 text-xs text-gray-600 bg-white hover:bg-gray-50 active:scale-95 transition rounded-r-lg"
           >
             撤单
-          </button>
-          <button
-            onClick={() => setIsFavorite(!isFavorite)}
-            className="flex-1 py-3 text-xs text-gray-500 bg-white hover:bg-gray-50 active:scale-95 transition"
-          >
-            加自选
-          </button>
-          <button
-            onClick={() => {}}
-            className="flex-1 py-3 text-xs text-gray-400 bg-white hover:bg-gray-50 active:scale-95 transition rounded-r-lg"
-          >
-            更多
           </button>
         </div>
       </div>

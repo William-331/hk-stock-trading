@@ -8,11 +8,28 @@ function toLocalDate(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+// 交易时段内的时间点（HH:MM，30 分钟粒度），与后端 tradingSlots 一致，供“最高/最低价出现时间”下拉使用
+// 早盘 9:00-12:00，午休 12:00-13:00 休市，午盘 13:00-16:00，收盘 16:10
+const TRADE_TIME_OPTIONS: string[] = (() => {
+  const pad = (x: number) => String(x).padStart(2, '0');
+  const out: string[] = [];
+  for (let h = 9; h < 12; h++) for (let m = 0; m < 60; m += 30) out.push(`${pad(h)}:${pad(m)}`);
+  out.push('12:00');
+  for (let h = 13; h < 16; h++) for (let m = 0; m < 60; m += 30) out.push(`${pad(h)}:${pad(m)}`);
+  out.push('16:00');
+  out.push('16:10');
+  return out;
+})();
+
 interface BatchDay {
   date: string;
   isWeekend: boolean;
   open: string;
   close: string;
+  high: string;      // 当日最高价（选填）
+  low: string;       // 当日最低价（选填）
+  highTime: string;  // 最高价出现时间（选填，空=系统安排）
+  lowTime: string;   // 最低价出现时间（选填，空=系统安排）
   volUp: string;   // 波动上限，如 "1.0" = +1%
   volDown: string; // 波动下限，如 "2.0" = -2%
 }
@@ -42,6 +59,8 @@ export default function PriceManage() {
   const [dailyClose, setDailyClose] = useState('');
   const [dailyHigh, setDailyHigh] = useState('');
   const [dailyLow, setDailyLow] = useState('');
+  const [dailyHighTime, setDailyHighTime] = useState(''); // 最高价出现时间，空=系统安排
+  const [dailyLowTime, setDailyLowTime] = useState('');    // 最低价出现时间，空=系统安排
   const [dailyVolUp, setDailyVolUp] = useState('1.0');
   const [dailyVolDown, setDailyVolDown] = useState('1.0');
 
@@ -118,11 +137,9 @@ export default function PriceManage() {
     const m = now.getMinutes();
     const t = h * 60 + m;
     if (t < 9 * 60) return { label: '盘前', color: 'bg-gray-100 text-gray-500' };
-    if (t < 9 * 60 + 30) return { label: '集合竞价', color: 'bg-yellow-100 text-yellow-700' };
     if (t < 12 * 60) return { label: '交易中', color: 'bg-red-50 text-[#e15241]' };
     if (t < 13 * 60) return { label: '午间休市', color: 'bg-gray-100 text-gray-500' };
-    if (t < 16 * 60) return { label: '交易中', color: 'bg-red-50 text-[#e15241]' };
-    if (t < 16 * 60 + 10) return { label: '收盘定价', color: 'bg-yellow-100 text-yellow-700' };
+    if (t <= 16 * 60 + 10) return { label: '交易中', color: 'bg-red-50 text-[#e15241]' };
     return { label: '已收盘', color: 'bg-gray-100 text-gray-500' };
   };
   const tradingStatus = getTradingStatus();
@@ -131,8 +148,8 @@ export default function PriceManage() {
     return {
       tradingDays,
       skippedDays: batchDays.filter(d => d.isWeekend || !d.open || !d.close).length,
-      planSlotsRebuilt: tradingDays * 68,
-      stockSlotsRebuilt: applyToStockPrices ? tradingDays * 68 : 0,
+      planSlotsRebuilt: tradingDays * 15,
+      stockSlotsRebuilt: applyToStockPrices ? tradingDays * 15 : 0,
       latestTimeSlotAfterRebuild: null,
     };
   }, [batchDays, applyToStockPrices]);
@@ -145,10 +162,14 @@ export default function PriceManage() {
     if (highN !== undefined && lowN !== undefined && highN < lowN) { showMsg('当日最高价不能低于最低价'); return; }
     if (highN !== undefined && (Number(dailyOpen) > highN || Number(dailyClose) > highN)) { showMsg('开盘价/收盘价不能高于当日最高价'); return; }
     if (lowN !== undefined && (Number(dailyOpen) < lowN || Number(dailyClose) < lowN)) { showMsg('开盘价/收盘价不能低于当日最低价'); return; }
+    // 出现时间只在填了对应价格时才发送；两者不能相同
+    const highTime = highN !== undefined && dailyHighTime ? dailyHighTime : undefined;
+    const lowTime = lowN !== undefined && dailyLowTime ? dailyLowTime : undefined;
+    if (highTime && lowTime && highTime === lowTime) { showMsg('最高价与最低价不能设在同一时间点'); return; }
     try {
       const res = await setDailyPlan({
         date: dailyDate, open: Number(dailyOpen), close: Number(dailyClose),
-        high: highN, low: lowN,
+        high: highN, low: lowN, highTime, lowTime,
         volUp: Number(dailyVolUp), volDown: Number(dailyVolDown),
       });
       showMsg((res.data as any).message);
@@ -167,7 +188,7 @@ export default function PriceManage() {
     while (cur <= end) {
       const ds = toLocalDate(cur);
       const wk = isWeekend(ds);
-      days.push({ date: ds, isWeekend: wk, open: '', close: '', volUp: '1.0', volDown: '1.0' });
+      days.push({ date: ds, isWeekend: wk, open: '', close: '', high: '', low: '', highTime: '', lowTime: '', volUp: '1.0', volDown: '1.0' });
       cur.setDate(cur.getDate() + 1);
     }
     setBatchDays(days);
@@ -227,6 +248,10 @@ export default function PriceManage() {
             close: Number(d.close || 0),
             volUp: Number(d.volUp || 1),
             volDown: Number(d.volDown || 1),
+            high: d.high ? Number(d.high) : undefined,
+            low: d.low ? Number(d.low) : undefined,
+            highTime: d.high && d.highTime ? d.highTime : undefined,
+            lowTime: d.low && d.lowTime ? d.lowTime : undefined,
             skip: d.isWeekend || !d.open || !d.close,
           }])
         ).values()
@@ -434,11 +459,21 @@ export default function PriceManage() {
               <label className="text-xs text-gray-500">当日最高价</label>
               <input type="number" step="0.01" value={dailyHigh} onChange={e => setDailyHigh(e.target.value)}
                 placeholder="选填，如 13.20" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <select value={dailyHighTime} onChange={e => setDailyHighTime(e.target.value)} disabled={!dailyHigh}
+                className="mt-1.5 w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs bg-white disabled:bg-gray-100 disabled:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">出现时间：系统安排</option>
+                {TRADE_TIME_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
             </div>
             <div>
               <label className="text-xs text-gray-500">当日最低价</label>
               <input type="number" step="0.01" value={dailyLow} onChange={e => setDailyLow(e.target.value)}
                 placeholder="选填，如 12.30" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <select value={dailyLowTime} onChange={e => setDailyLowTime(e.target.value)} disabled={!dailyLow}
+                className="mt-1.5 w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs bg-white disabled:bg-gray-100 disabled:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">出现时间：系统安排</option>
+                {TRADE_TIME_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -518,37 +553,67 @@ export default function PriceManage() {
               </div>
               <div className="space-y-1 max-h-80 overflow-y-auto">
                 {batchDays.map((d, i) => (
-                  <div key={d.date} className={`flex items-center gap-2 px-2 py-2 rounded-lg text-sm ${d.isWeekend ? 'bg-gray-100 opacity-50' : 'bg-white border border-gray-200'}`}>
-                    <span className={`w-24 text-xs ${d.isWeekend ? 'text-gray-400 line-through' : 'text-gray-700'}`}>
-                      {d.date.slice(5)}{d.isWeekend ? ' 休' : ''}
-                    </span>
-                    {d.isWeekend ? (
-                      <>
-                        <span className="flex-1 text-xs text-gray-300">-</span>
-                        <span className="flex-1 text-xs text-gray-300">-</span>
-                        <span className="w-12 text-xs text-gray-300">-</span>
-                        <span className="w-12 text-xs text-gray-300">-</span>
-                      </>
-                    ) : (
-                      <>
-                        <input type="number" step="0.01" value={d.open}
-                          onChange={e => { const cp = [...batchDays]; cp[i].open = e.target.value; setBatchDays(cp); }}
-                          placeholder="开" className="flex-1 w-0 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                        <input type="number" step="0.01" value={d.close}
-                          onChange={e => { const cp = [...batchDays]; cp[i].close = e.target.value; setBatchDays(cp); }}
-                          placeholder="收" className="flex-1 w-0 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                        <input type="number" step="0.1" value={d.volUp}
-                          onChange={e => { const cp = [...batchDays]; cp[i].volUp = e.target.value; setBatchDays(cp); }}
-                          className="w-12 px-1 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                        <input type="number" step="0.1" value={d.volDown}
-                          onChange={e => { const cp = [...batchDays]; cp[i].volDown = e.target.value; setBatchDays(cp); }}
-                          className="w-12 px-1 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                      </>
+                  <div key={d.date} className={`px-2 py-2 rounded-lg text-sm ${d.isWeekend ? 'bg-gray-100 opacity-50' : 'bg-white border border-gray-200'}`}>
+                    {/* 第一行：日期 + 开/收 + 上下限 + 当日波动 */}
+                    <div className="flex items-center gap-2">
+                      <span className={`w-24 text-xs ${d.isWeekend ? 'text-gray-400 line-through' : 'text-gray-700'}`}>
+                        {d.date.slice(5)}{d.isWeekend ? ' 休' : ''}
+                      </span>
+                      {d.isWeekend ? (
+                        <>
+                          <span className="flex-1 text-xs text-gray-300">-</span>
+                          <span className="flex-1 text-xs text-gray-300">-</span>
+                          <span className="w-12 text-xs text-gray-300">-</span>
+                          <span className="w-12 text-xs text-gray-300">-</span>
+                        </>
+                      ) : (
+                        <>
+                          <input type="number" step="0.01" value={d.open}
+                            onChange={e => { const cp = [...batchDays]; cp[i].open = e.target.value; setBatchDays(cp); }}
+                            placeholder="开" className="flex-1 w-0 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                          <input type="number" step="0.01" value={d.close}
+                            onChange={e => { const cp = [...batchDays]; cp[i].close = e.target.value; setBatchDays(cp); }}
+                            placeholder="收" className="flex-1 w-0 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                          <input type="number" step="0.1" value={d.volUp}
+                            onChange={e => { const cp = [...batchDays]; cp[i].volUp = e.target.value; setBatchDays(cp); }}
+                            className="w-12 px-1 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                          <input type="number" step="0.1" value={d.volDown}
+                            onChange={e => { const cp = [...batchDays]; cp[i].volDown = e.target.value; setBatchDays(cp); }}
+                            className="w-12 px-1 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        </>
+                      )}
+                      <button onClick={() => openDayEdit(d.date)}
+                        className="w-16 py-1.5 text-[10px] text-blue-500 border border-blue-200 rounded hover:bg-blue-50 shrink-0">
+                        当日波动
+                      </button>
+                    </div>
+                    {/* 第二行：当日最高/最低价 + 出现时间（选填） */}
+                    {!d.isWeekend && (
+                      <div className="flex items-center gap-2 mt-1.5 pl-24">
+                        <div className="flex-1 flex items-center gap-1">
+                          <input type="number" step="0.01" value={d.high}
+                            onChange={e => { const cp = [...batchDays]; cp[i].high = e.target.value; setBatchDays(cp); }}
+                            placeholder="最高(选填)" className="w-0 flex-1 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                          <select value={d.highTime} disabled={!d.high}
+                            onChange={e => { const cp = [...batchDays]; cp[i].highTime = e.target.value; setBatchDays(cp); }}
+                            className="w-20 px-1 py-1.5 border border-gray-200 rounded text-[10px] bg-white disabled:bg-gray-100 disabled:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400">
+                            <option value="">时间:自动</option>
+                            {TRADE_TIME_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                        </div>
+                        <div className="flex-1 flex items-center gap-1">
+                          <input type="number" step="0.01" value={d.low}
+                            onChange={e => { const cp = [...batchDays]; cp[i].low = e.target.value; setBatchDays(cp); }}
+                            placeholder="最低(选填)" className="w-0 flex-1 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                          <select value={d.lowTime} disabled={!d.low}
+                            onChange={e => { const cp = [...batchDays]; cp[i].lowTime = e.target.value; setBatchDays(cp); }}
+                            className="w-20 px-1 py-1.5 border border-gray-200 rounded text-[10px] bg-white disabled:bg-gray-100 disabled:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400">
+                            <option value="">时间:自动</option>
+                            {TRADE_TIME_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                        </div>
+                      </div>
                     )}
-                    <button onClick={() => openDayEdit(d.date)}
-                      className="w-16 py-1.5 text-[10px] text-blue-500 border border-blue-200 rounded hover:bg-blue-50 shrink-0">
-                      当日波动
-                    </button>
                   </div>
                 ))}
               </div>

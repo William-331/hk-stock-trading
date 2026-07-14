@@ -7,11 +7,11 @@ const router = Router();
 // 合法 time_slot 形如 "YYYY-MM-DD HH:MM"（GLOB 过滤掉历史脏数据）
 const SLOT_GLOB = '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]';
 
-// 交易时段过滤：只保留 09:30-12:00 与 13:00-16:00 的点（substr(time_slot,12,5)=HH:MM）
+// 交易时段过滤：只保留 09:00-12:00 与 13:00-16:10 的点（substr(time_slot,12,5)=HH:MM）
 // 排除早期种子数据里 16:13/17:03 这类非交易时段、时间不规整的点
 const TRADING_HOURS_SQL =
-  "((substr(time_slot,12,5) >= '09:30' AND substr(time_slot,12,5) <= '12:00') " +
-  "OR (substr(time_slot,12,5) >= '13:00' AND substr(time_slot,12,5) <= '16:00'))";
+  "((substr(time_slot,12,5) >= '09:00' AND substr(time_slot,12,5) <= '12:00') " +
+  "OR (substr(time_slot,12,5) >= '13:00' AND substr(time_slot,12,5) <= '16:10'))";
 
 // 行情读取统一过滤：格式合法 + 交易时段内 + 不晚于当前时间（绝不显示未来计划走势）
 const VALID_SLOT_SQL = `time_slot GLOB ? AND ${TRADING_HOURS_SQL} AND time_slot <= ?`;

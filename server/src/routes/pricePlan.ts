@@ -5,27 +5,25 @@ import { requireAuth, requireAdmin } from '../middleware/auth';
 const router = Router();
 
 // ================================================================
-// 工具：生成某个交易日所有5分钟时间点（9:30-12:00, 13:00-16:00）
+// 工具：生成某个交易日所有交易时间点（30 分钟粒度）
+//   早盘 9:00-12:00：9:00 9:30 10:00 10:30 11:00 11:30 12:00
+//   午休 12:00-13:00 休市
+//   午盘 13:00-16:00：13:00 13:30 ... 16:00，另加收盘 16:10
+//   开盘 9:00，收盘 16:10
 // ================================================================
+const SLOT_STEP_MIN = 30; // 时间点间隔（分钟）
+
 function tradingSlots(dateStr: string): string[] {
   const slots: string[] = [];
-  // 上午 9:30 - 12:00（含）
-  for (let h = 9; h < 12; h++) {
-    const startM = h === 9 ? 30 : 0;
-    for (let m = startM; m < 60; m += 5) {
-      if (h === 11 && m > 55) continue; // 12:00 是最后一个
-      slots.push(`${dateStr} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-    }
-  }
-  // 12:00
-  slots.push(`${dateStr} 12:00`);
-  // 下午 13:00 - 16:00（含）
-  for (let h = 13; h <= 16; h++) {
-    const endM = h === 16 ? 5 : 60; // 16:00 后到 16:05 结束（含16:00）
-    for (let m = 0; m < endM; m += 5) {
-      slots.push(`${dateStr} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-    }
-  }
+  const push = (h: number, m: number) =>
+    slots.push(`${dateStr} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+  // 上午 9:00 - 12:00（含 12:00）
+  for (let h = 9; h < 12; h++) for (let m = 0; m < 60; m += SLOT_STEP_MIN) push(h, m);
+  push(12, 0);
+  // 下午 13:00 - 16:00（含 16:00）
+  for (let h = 13; h < 16; h++) for (let m = 0; m < 60; m += SLOT_STEP_MIN) push(h, m);
+  push(16, 0);
+  push(16, 10); // 收盘点
   return slots;
 }
 
@@ -50,8 +48,18 @@ function isTradingTime(timeStr: string): boolean {
   return true;
 }
 
-// 生成一整天的连续走势（布朗桥：两端钉死 open/close，中间连续随机游走）
+// 生成一整天的连续走势（多锚点布朗桥）
+//
+// 逻辑（可完整解释给运营看）：
+//   1. 关键锚点：开盘(第0点) / 收盘(末点) 必有；若给了当日最高/最低价，它们也是锚点，
+//      并可由 opts.highIdx / lowIdx 精确指定出现在第几个5分钟点（留空则系统在盘中随机安排）。
+//   2. 基线：把这些锚点按时间顺序用「折线」连起来 —— 锚点时刻的价格精确命中设定值，
+//      锚点之间线性过渡（例：开盘→盘中最低→盘中最高→收盘）。
+//   3. 波动：在折线基线上叠加分段布朗桥噪声（每个锚点处噪声归零，保证锚点不被扰动）。
+//      volUp/volDown% 只决定这层噪声的“毛刺”粗细，噪声再大也不会突破当日最高/最低、不挪动锚点。
+//
 // volUp: 相对基线向上最大偏离% (如1.0=+1%)  volDown: 向下最大偏离%
+// opts.highIdx/lowIdx: 最高/最低价出现的时间点下标（0-based，落在 [1, total-2] 内有效）
 // 返回每个时间点的 {open, high, low, close, volume}，且每根开盘=上一根收盘（K线连续）
 function generateDaySeries(
   openPrice: number,
@@ -61,51 +69,86 @@ function generateDaySeries(
   volDown = 1.0,
   dayHigh?: number,
   dayLow?: number,
+  opts?: { highIdx?: number; lowIdx?: number },
 ): Array<{ open: number; high: number; low: number; close: number; volume: number }> {
   if (total <= 0) return [];
   const r2 = (n: number) => Math.round(n * 100) / 100;
 
-  // 是否指定了当日最高/最低价（作为整日的硬性包络）
   const hasHigh = dayHigh !== undefined && Number.isFinite(dayHigh) && dayHigh > 0;
   const hasLow = dayLow !== undefined && Number.isFinite(dayLow) && dayLow > 0;
+  const lastIdx = total - 1;
+  // 把下标夹在盘中区间 [1, lastIdx-1]，避免极值退化到开/收盘那一刻
+  const clampIdx = (i: number) => Math.min(Math.max(i, 1), Math.max(1, lastIdx - 1));
 
-  // 1. 基线：open -> close 的线性插值（每个点的收盘锚点）
-  const baseAt = (i: number) => {
-    const ratio = total > 1 ? i / (total - 1) : 1;
-    return openPrice + (closePrice - openPrice) * ratio;
-  };
+  // ---- 1. 确定最高/最低价的时间下标 ----
+  let highIdx: number | undefined;
+  let lowIdx: number | undefined;
+  if (hasHigh && total > 2) {
+    highIdx = opts?.highIdx !== undefined && opts.highIdx >= 0
+      ? clampIdx(opts.highIdx)
+      : clampIdx(Math.round(total * (0.2 + Math.random() * 0.6))); // 未指定：盘中随机
+  }
+  if (hasLow && total > 2) {
+    lowIdx = opts?.lowIdx !== undefined && opts.lowIdx >= 0
+      ? clampIdx(opts.lowIdx)
+      : clampIdx(Math.round(total * (0.2 + Math.random() * 0.6)));
+    // 高低点撞在同一时刻则错开一格；仍冲突（点太少）则舍弃最低点锚
+    if (highIdx !== undefined && lowIdx === highIdx) {
+      const nudged = clampIdx(lowIdx + (lowIdx < lastIdx - 1 ? 1 : -1));
+      lowIdx = nudged === highIdx ? undefined : nudged;
+    }
+  }
 
-  // 2. 随机游走偏离量（布朗桥：起点终点偏离都为0，中间连续累加）
-  //    步长用平均波动幅度估算，保证整体起伏自然而不爆量
+  // ---- 2. 组装锚点（按时间下标升序）：开盘 → [盘中高/低] → 收盘 ----
+  const anchors: Array<{ idx: number; price: number }> = [{ idx: 0, price: openPrice }];
+  const mids: Array<{ idx: number; price: number }> = [];
+  if (highIdx !== undefined) mids.push({ idx: highIdx, price: dayHigh! });
+  if (lowIdx !== undefined) mids.push({ idx: lowIdx, price: dayLow! });
+  mids.sort((a, b) => a.idx - b.idx);
+  for (const m of mids) anchors.push(m);
+  anchors.push({ idx: lastIdx, price: closePrice });
+
+  // ---- 3. 折线基线：锚点处精确命中，锚点之间线性过渡 ----
+  const baseline = new Array<number>(total).fill(0);
+  for (let s = 0; s < anchors.length - 1; s++) {
+    const a = anchors[s], b = anchors[s + 1];
+    const span = b.idx - a.idx;
+    for (let i = a.idx; i <= b.idx; i++) {
+      const t = span > 0 ? (i - a.idx) / span : 0;
+      baseline[i] = a.price + (b.price - a.price) * t;
+    }
+  }
+
+  // ---- 4. 分段布朗桥噪声：每段两端（锚点）噪声归零，中间连续随机游走 ----
   const avgBase = (openPrice + closePrice) / 2;
-  const maxDev = avgBase * (Math.max(volUp, volDown) / 100); // 允许的最大偏离绝对值
-  const step = maxDev / Math.max(2, Math.sqrt(total));        // 单步游走幅度
-
-  const walk: number[] = new Array(total).fill(0);
-  for (let i = 1; i < total; i++) {
-    walk[i] = walk[i - 1] + (Math.random() - 0.5) * 2 * step;
-  }
-  // 减去线性分量，让首尾偏离归零（布朗桥）
-  const lastWalk = walk[total - 1];
-  for (let i = 0; i < total; i++) {
-    walk[i] -= lastWalk * (total > 1 ? i / (total - 1) : 1);
-  }
-  // 限制偏离在 [-volDown%, +volUp%] 区间内
-  for (let i = 0; i < total; i++) {
-    const upLimit = baseAt(i) * (volUp / 100);
-    const downLimit = baseAt(i) * (volDown / 100);
-    if (walk[i] > upLimit) walk[i] = upLimit;
-    if (walk[i] < -downLimit) walk[i] = -downLimit;
+  const maxDev = avgBase * (Math.max(volUp, volDown) / 100);
+  const noise = new Array<number>(total).fill(0);
+  for (let s = 0; s < anchors.length - 1; s++) {
+    const a = anchors[s].idx, b = anchors[s + 1].idx;
+    const len = b - a;
+    if (len <= 1) continue;
+    const step = maxDev / Math.max(2, Math.sqrt(len));
+    const w = new Array<number>(len + 1).fill(0);
+    for (let k = 1; k <= len; k++) w[k] = w[k - 1] + (Math.random() - 0.5) * 2 * step;
+    const last = w[len];
+    for (let k = 0; k <= len; k++) {
+      w[k] -= last * (k / len);   // 钉死两端为 0（布朗桥）
+      noise[a + k] = w[k];
+    }
   }
 
-  // 3. 每个点的收盘 = 基线 + 偏离；端点强制钉死
-  const closes: number[] = [];
-  for (let i = 0; i < total; i++) closes.push(baseAt(i) + walk[i]);
+  // ---- 5. 收盘 = 基线 + 受限噪声；再套硬性包络与锚点 ----
+  const closes = new Array<number>(total);
+  for (let i = 0; i < total; i++) {
+    const up = baseline[i] * (volUp / 100);
+    const dn = baseline[i] * (volDown / 100);
+    let n = noise[i];
+    if (n > up) n = up;
+    if (n < -dn) n = -dn;
+    closes[i] = baseline[i] + n;
+  }
   closes[0] = openPrice;
-  closes[total - 1] = closePrice;
-
-  // 3.5 若指定了当日最高/最低价，把所有收盘价夹进 [dayLow, dayHigh] 区间，
-  //     再挑波动最大的两个点分别顶到 dayHigh / dayLow，保证当日确实触及这两个极值。
+  closes[lastIdx] = closePrice;
   if (hasHigh || hasLow) {
     const hi = hasHigh ? dayHigh! : Infinity;
     const lo = hasLow ? dayLow! : -Infinity;
@@ -113,23 +156,12 @@ function generateDaySeries(
       if (closes[i] > hi) closes[i] = hi;
       if (closes[i] < lo) closes[i] = lo;
     }
-    // 端点也不能越界（open/close 若超出给定高低，同样夹住）
-    closes[0] = Math.min(Math.max(closes[0], lo), hi);
-    closes[total - 1] = Math.min(Math.max(closes[total - 1], lo), hi);
-    // 让最高点/最低点真正落在盘中（首尾之外），避免极值退化为开/收盘
-    if (hasHigh && total > 2) {
-      let maxIdx = 1;
-      for (let i = 2; i < total - 1; i++) if (closes[i] > closes[maxIdx]) maxIdx = i;
-      closes[maxIdx] = dayHigh!;
-    }
-    if (hasLow && total > 2) {
-      let minIdx = 1;
-      for (let i = 2; i < total - 1; i++) if (closes[i] < closes[minIdx]) minIdx = i;
-      closes[minIdx] = dayLow!;
-    }
   }
+  // 锚点精确命中（保证最高/最低价出现在设定的时间点上）
+  if (highIdx !== undefined) closes[highIdx] = dayHigh!;
+  if (lowIdx !== undefined) closes[lowIdx] = dayLow!;
 
-  // 4. 组装 OHLC：开盘=上一根收盘（首根=openPrice），高低在开收之间外扩小幅
+  // ---- 6. 组装 OHLC：开盘=上一根收盘（K线连续），影线小幅外扩且不破包络 ----
   const series = [];
   for (let i = 0; i < total; i++) {
     const o = i === 0 ? openPrice : closes[i - 1];
@@ -137,7 +169,6 @@ function generateDaySeries(
     const wick = avgBase * (Math.max(volUp, volDown) / 100) * 0.15 * Math.random();
     let h = r2(Math.max(o, c) + wick);
     let l = r2(Math.min(o, c) - wick);
-    // 影线不得突破当日给定的最高/最低价
     if (hasHigh) h = r2(Math.min(h, dayHigh!));
     if (hasLow) l = r2(Math.max(l, dayLow!));
     const v = Math.floor(Math.random() * 5000) + 2000;
@@ -161,9 +192,25 @@ function getLatestTimeSlot() {
   return latest?.time_slot || null;
 }
 
-function buildSlotsForDay(date: string, open: number, close: number, volUp = 1.0, volDown = 1.0) {
+// 把 "HH:MM" 映射到当天 slots 数组的下标；无效/不在时段内返回 undefined
+function slotIndexOfTime(slots: string[], date: string, t?: string): number | undefined {
+  if (!t || typeof t !== 'string') return undefined;
+  const hhmm = t.trim();
+  if (!/^\d{1,2}:\d{2}$/.test(hhmm)) return undefined;
+  const [h, m] = hhmm.split(':').map(Number);
+  const target = `${date} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  const idx = slots.indexOf(target);
+  return idx >= 0 ? idx : undefined;
+}
+
+function buildSlotsForDay(
+  date: string, open: number, close: number, volUp = 1.0, volDown = 1.0,
+  opts?: { high?: number; low?: number; highTime?: string; lowTime?: string },
+) {
   const slots = tradingSlots(date).filter(isTradingTime);
-  const series = generateDaySeries(open, close, slots.length, volUp, volDown);
+  const highIdx = opts?.high !== undefined ? slotIndexOfTime(slots, date, opts.highTime) : undefined;
+  const lowIdx = opts?.low !== undefined ? slotIndexOfTime(slots, date, opts.lowTime) : undefined;
+  const series = generateDaySeries(open, close, slots.length, volUp, volDown, opts?.high, opts?.low, { highIdx, lowIdx });
   return slots.map((timeSlot, index) => ({
     time_slot: timeSlot,
     ...series[index],
@@ -241,20 +288,58 @@ router.post('/daily', requireAuth, requireAdmin, (req: Request, res: Response) =
     return res.status(400).json({ error: '开盘价/收盘价不能低于当日最低价' });
   }
 
+  // 最高/最低价的出现时间（可选，"HH:MM"）。映射到 slots 下标；
+  // 空/不在交易时段则留空，交给算法在盘中随机安排。
+  const slotIdxOfTime = (t?: string): number | undefined => {
+    if (!t || typeof t !== 'string') return undefined;
+    const hhmm = t.trim();
+    if (!/^\d{1,2}:\d{2}$/.test(hhmm)) return undefined;
+    const [h, m] = hhmm.split(':').map(Number);
+    const target = `${date} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    const idx = slots.indexOf(target);
+    return idx >= 0 ? idx : undefined;
+  };
+  const { highTime, lowTime } = req.body;
+  const highIdx = dayHigh !== undefined ? slotIdxOfTime(highTime) : undefined;
+  const lowIdx = dayLow !== undefined ? slotIdxOfTime(lowTime) : undefined;
+  if (highTime && dayHigh !== undefined && highIdx === undefined) {
+    return res.status(400).json({ error: '最高价出现时间不在交易时段内（9:00-12:00 / 13:00-16:10，5分钟为一格）' });
+  }
+  if (lowTime && dayLow !== undefined && lowIdx === undefined) {
+    return res.status(400).json({ error: '最低价出现时间不在交易时段内（9:00-12:00 / 13:00-16:10，5分钟为一格）' });
+  }
+  if (highIdx !== undefined && lowIdx !== undefined && highIdx === lowIdx) {
+    return res.status(400).json({ error: '最高价与最低价不能设在同一时间点' });
+  }
+
   const insert = db.prepare(
     'INSERT OR REPLACE INTO price_plan (time_slot, open, high, low, close, volume, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   );
+  // 生成后当场把「已到点」(time_slot <= 现在) 的计划回填到可见 K 线，
+  // 使当日修改立即反映到图表；未来时刻的点仍标 pending，留给 cron 到点回填。
+  const upsertStock = db.prepare(
+    'INSERT OR REPLACE INTO stock_prices (time_slot, open, high, low, close, volume, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  const markStatus = db.prepare('UPDATE price_plan SET status = ? WHERE time_slot = ?');
 
   try {
-    const series = generateDaySeries(Number(open), Number(close), slots.length, up, down, dayHigh, dayLow);
+    const series = generateDaySeries(Number(open), Number(close), slots.length, up, down, dayHigh, dayLow, { highIdx, lowIdx });
+    const nowStr = nowSlotStr();
+    let synced = 0;
     const tx = db.transaction(() => {
       for (let i = 0; i < slots.length; i++) {
         const p = series[i];
         insert.run(slots[i], p.open, p.high, p.low, p.close, p.volume, 'pending', req.user?.id || 1);
+        // 已到点的立即同步到 stock_prices 并标 executed
+        if (slots[i] <= nowStr) {
+          upsertStock.run(slots[i], p.open, p.high, p.low, p.close, p.volume, req.user?.id || 1);
+          markStatus.run('executed', slots[i]);
+          synced++;
+        }
       }
     });
     tx();
-    res.json({ message: `已生成 ${slots.length} 个价格计划点`, count: slots.length });
+    res.json({ message: `已生成 ${slots.length} 个价格计划点（${synced} 个已到点，立即生效）`, count: slots.length, synced });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -314,7 +399,7 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
     to?: string;
     applyToStockPrices?: boolean;
     reason?: string;
-    days?: Array<{ date: string; open: number; close: number; volUp?: number; volDown?: number; skip?: boolean }>;
+    days?: Array<{ date: string; open: number; close: number; volUp?: number; volDown?: number; skip?: boolean; high?: number; low?: number; highTime?: string; lowTime?: string }>;
   };
 
   if (!from || !to) {
@@ -331,7 +416,7 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
   }
 
   const dayMap = new Map(days.map(day => [day.date, day]));
-  const activeDays: Array<{ date: string; open: number; close: number; volUp: number; volDown: number }> = [];
+  const activeDays: Array<{ date: string; open: number; close: number; volUp: number; volDown: number; high?: number; low?: number; highTime?: string; lowTime?: string }> = [];
   const skippedDays: string[] = [];
   const warnings: string[] = [];
 
@@ -363,7 +448,26 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
       return res.status(400).json({ error: `${dateStr} 的波动参数无效` });
     }
 
-    activeDays.push({ date: dateStr, open, close, volUp, volDown });
+    // 逐日最高/最低价（可选）及出现时间校验
+    const high = input.high !== undefined && (input.high as any) !== '' ? Number(input.high) : undefined;
+    const low = input.low !== undefined && (input.low as any) !== '' ? Number(input.low) : undefined;
+    if (high !== undefined && (!Number.isFinite(high) || high <= 0)) {
+      return res.status(400).json({ error: `${dateStr} 的当日最高价无效` });
+    }
+    if (low !== undefined && (!Number.isFinite(low) || low <= 0)) {
+      return res.status(400).json({ error: `${dateStr} 的当日最低价无效` });
+    }
+    if (high !== undefined && low !== undefined && high < low) {
+      return res.status(400).json({ error: `${dateStr} 的当日最高价不能低于最低价` });
+    }
+    if (high !== undefined && (open > high || close > high)) {
+      return res.status(400).json({ error: `${dateStr} 的开盘价/收盘价不能高于当日最高价` });
+    }
+    if (low !== undefined && (open < low || close < low)) {
+      return res.status(400).json({ error: `${dateStr} 的开盘价/收盘价不能低于当日最低价` });
+    }
+
+    activeDays.push({ date: dateStr, open, close, volUp, volDown, high, low, highTime: input.highTime, lowTime: input.lowTime });
     current.setDate(current.getDate() + 1);
   }
 
@@ -371,7 +475,10 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
     return res.status(400).json({ error: '没有可重建的交易日' });
   }
 
-  const planRows = activeDays.flatMap(day => buildSlotsForDay(day.date, day.open, day.close, day.volUp, day.volDown));
+  const planRows = activeDays.flatMap(day => buildSlotsForDay(
+    day.date, day.open, day.close, day.volUp, day.volDown,
+    { high: day.high, low: day.low, highTime: day.highTime, lowTime: day.lowTime },
+  ));
   if (planRows.length === 0) {
     return res.status(400).json({ error: '未生成任何价格计划点' });
   }

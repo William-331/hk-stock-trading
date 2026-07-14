@@ -100,7 +100,30 @@ app.get('/api/admin/dashboard', requireAuth, requireAdmin, (_req, res) => {
   const pendingCount = (db.prepare("SELECT COUNT(*) as cnt FROM orders WHERE status = 'pending'").get() as any).cnt;
   const tradeCount = (db.prepare('SELECT COUNT(*) as cnt FROM trade_records').get() as any).cnt;
   const totalAmount = (db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM trade_records').get() as any).total;
-  res.json({ userCount, pendingCount, tradeCount, totalAmount });
+
+  // 今日成交概况（与 daily-summary 一致：用本地日期字符串比对 created_at）
+  const now = new Date();
+  const pad = (x: number) => String(x).padStart(2, '0');
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const todayRow = db.prepare(
+    "SELECT COUNT(*) as cnt, COALESCE(SUM(amount), 0) as amount FROM trade_records WHERE created_at >= ? AND created_at <= ?"
+  ).get(today, today + ' 23:59:59') as any;
+
+  // 最近待审申请（最多 5 条，最早的排前面，方便先处理积压）
+  const recentPending = db.prepare(`
+    SELECT o.id, o.type, o.quantity, o.price, o.created_at, u.username, u.real_name
+    FROM orders o JOIN users u ON u.id = o.user_id
+    WHERE o.status = 'pending'
+    ORDER BY o.created_at ASC
+    LIMIT 5
+  `).all();
+
+  res.json({
+    userCount, pendingCount, tradeCount, totalAmount,
+    todayTradeCount: todayRow.cnt,
+    todayAmount: todayRow.amount,
+    recentPending,
+  });
 });
 
 // 用户管理

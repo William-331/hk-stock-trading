@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getMyOrders } from '../api';
+import { getMyOrders, cancelOrder } from '../api';
 
 const statusMap: Record<string, { label: string; cls: string }> = {
   pending: { label: '待审核', cls: 'bg-amber-50 text-amber-600 border-amber-200' },
@@ -12,13 +12,32 @@ export default function MyOrders() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [cancelingId, setCancelingId] = useState<number | null>(null);
 
-  useEffect(() => {
+  const load = () => {
+    setLoading(true);
     getMyOrders(page)
       .then(res => { setOrders(res.data.list); setTotal(res.data.total); })
       .catch(console.error)
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
   }, [page]);
+
+  const handleCancel = async (id: number) => {
+    if (!window.confirm('确认撤销这笔申请吗？')) return;
+    setCancelingId(id);
+    try {
+      await cancelOrder(id);
+      load();
+    } catch (e: any) {
+      window.alert(e?.response?.data?.error || '撤销失败，请重试');
+    } finally {
+      setCancelingId(null);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] pb-20">
@@ -59,6 +78,17 @@ export default function MyOrders() {
                   <p className="mt-2 text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">
                     备注: {order.audit_comment}
                   </p>
+                )}
+                {order.status === 'pending' && (
+                  <div className="mt-3 flex justify-end">
+                    <button
+                      onClick={() => handleCancel(order.id)}
+                      disabled={cancelingId === order.id}
+                      className="px-3 py-1.5 text-xs text-red-500 border border-red-200 rounded-lg hover:bg-red-50 active:scale-95 transition disabled:opacity-40"
+                    >
+                      {cancelingId === order.id ? '撤销中...' : '撤销申请'}
+                    </button>
+                  </div>
                 )}
               </div>
             ))}

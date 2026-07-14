@@ -72,6 +72,27 @@ router.get('/my', requireAuth, (req: Request, res: Response) => {
   res.json({ total, list: rows, page: Number(page), pageSize: Number(pageSize) });
 });
 
+// 撤单：撤销自己「待审核」状态的申请
+// 待审核订单尚未产生任何副作用(未扣款/未加仓/未写成交)，故直接删除即可，
+// 并写一条操作日志留痕。已通过/已驳回的订单不可撤销。
+router.post('/:id/cancel', requireAuth, (req: Request, res: Response) => {
+  const userId = req.user!.id;
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id) as any;
+
+  if (!order) return res.status(404).json({ error: '申请不存在' });
+  if (order.user_id !== userId) {
+    return res.status(403).json({ error: '无权撤销该申请' });
+  }
+  if (order.status !== 'pending') {
+    return res.status(400).json({ error: '仅可撤销待审核的申请' });
+  }
+
+  db.prepare('DELETE FROM orders WHERE id = ?').run(order.id);
+  logOperation(userId, req.user!.username, 'cancel_order', `${order.type} ${order.quantity}股 @${order.price}`);
+
+  res.json({ message: '申请已撤销' });
+});
+
 // 申请详情
 router.get('/:id', requireAuth, (req: Request, res: Response) => {
   const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id) as any;

@@ -3,20 +3,20 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import ChangePasswordModal from './ChangePasswordModal';
 
 const userTabs = [
-  { path: '/', label: '行情', icon: '📈' },
-  { path: '/hk', label: '港股', icon: '🇭🇰' },
-  { path: '/positions', label: '持仓', icon: '💼' },
-  { path: '/my-orders', label: '申请', icon: '📋' },
+  { path: '/', label: '权证参考估值展示', icon: '📈' },
+  { path: '/hk', label: '公共港股', icon: '🇭🇰' },
+  { path: '/positions', label: '我的权证', icon: '💼' },
+  { path: '/my-orders', label: '认购与转让记录', icon: '📋' },
 ];
 
 const adminTabs = [
   { path: '/admin', label: '仪表盘', icon: '📊' },
-  { path: '/admin/audit', label: '审批', icon: '✅' },
-  { path: '/admin/price', label: '控价', icon: '🎯' },
-  { path: '/admin/trades', label: '记录', icon: '📝' },
+  { path: '/admin/audit', label: '意向审核', icon: '✅' },
+  { path: '/admin/price', label: '参考估值管理', icon: '🎯' },
+  { path: '/admin/trades', label: '认购转让记录', icon: '📝' },
 ];
 
-export default function Navbar() {
+export default function Navbar({ complianceReady = true }: { complianceReady?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
   const user = JSON.parse(localStorage.getItem('user') || 'null');
@@ -26,14 +26,14 @@ export default function Navbar() {
   const [showPwdReminder, setShowPwdReminder] = useState(false);
 
   useEffect(() => {
-    if (!user || user.role === 'admin') return;
+    if (!complianceReady || !user || user.role === 'admin') return;
     const changedKey = `pwdChanged_${user.username}`;   // 改密成功后永久写入，写了就不再提示
     const shownKey = `pwdReminderShown_${user.username}`; // 本次会话只提示一次，避免切页反复弹
     if (localStorage.getItem(changedKey)) return;
     if (sessionStorage.getItem(shownKey)) return;
     sessionStorage.setItem(shownKey, '1');
     setShowPwdReminder(true);
-  }, [user?.username, user?.role]);
+  }, [complianceReady, user?.username, user?.role]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -85,12 +85,12 @@ export default function Navbar() {
       )}
 
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg z-50">
-        <div className="flex items-center justify-around max-w-lg mx-auto">
+        <div className="grid grid-cols-6 items-stretch max-w-lg mx-auto">
           {tabs.map(tab => (
             <button
               key={tab.path}
               onClick={() => navigate(tab.path)}
-              className={`flex flex-col items-center py-2 px-3 text-xs transition-colors ${
+              className={`flex min-w-0 flex-col items-center px-1 py-1.5 text-[10px] leading-tight transition-colors ${
                 location.pathname === tab.path
                   ? 'text-blue-600 font-bold'
                   : 'text-gray-500 hover:text-blue-500'
@@ -103,7 +103,7 @@ export default function Navbar() {
           {user?.role === 'admin' ? (
             <button
               onClick={() => navigate('/admin/users')}
-              className={`flex flex-col items-center py-2 px-3 text-xs transition-colors ${
+              className={`flex min-w-0 flex-col items-center px-1 py-1.5 text-[10px] leading-tight transition-colors ${
                 location.pathname === '/admin/users'
                   ? 'text-blue-600 font-bold'
                   : 'text-gray-500 hover:text-blue-500'
@@ -115,15 +115,15 @@ export default function Navbar() {
           ) : (
             <button
               onClick={() => setShowChangePassword(true)}
-              className="flex flex-col items-center py-2 px-3 text-xs text-gray-400 hover:text-blue-500"
+              className="flex min-w-0 flex-col items-center px-1 py-1.5 text-[10px] leading-tight text-gray-400 hover:text-blue-500"
             >
               <span className="text-lg mb-0.5">🔑</span>
-              改密
+              账户
             </button>
           )}
           <button
             onClick={handleLogout}
-            className="flex flex-col items-center py-2 px-3 text-xs text-gray-400 hover:text-red-500"
+            className="flex min-w-0 flex-col items-center px-1 py-1.5 text-[10px] leading-tight text-gray-400 hover:text-red-500"
           >
             <span className="text-lg mb-0.5">🚪</span>
             退出

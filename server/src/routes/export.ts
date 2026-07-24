@@ -9,6 +9,26 @@ import fs from 'fs';
 const router = Router();
 const BACKUP_DIR = path.join(__dirname, '..', '..', '..', 'data', 'backups');
 
+function mapOrderType(type: unknown): string {
+  return type === 'buy' ? '认购' : type === 'sell' ? '申请转让' : '未知类型';
+}
+
+function mapOrderStatus(status: unknown): string {
+  return status === 'pending' ? '待审核' : status === 'approved' ? '已通过' : status === 'rejected' ? '已驳回' : '未知状态';
+}
+
+function mapAuditAction(action: unknown): string {
+  return action === 'approve' ? '通过' : action === 'reject' ? '驳回' : '未知操作';
+}
+
+function mapUserStatus(status: unknown): string {
+  return status === 'active' ? '正常' : status === 'frozen' ? '冻结' : '未知状态';
+}
+
+function mapUserRole(role: unknown): string {
+  return role === 'admin' ? '管理员' : role === 'user' ? '用户' : '未知角色';
+}
+
 // ==================== Excel 导出 ====================
 
 router.get('/trades', requireAuth, (req: Request, res: Response) => {
@@ -24,12 +44,12 @@ router.get('/trades', requireAuth, (req: Request, res: Response) => {
   if (endDate) { query += ' AND tr.created_at <= ?'; params.push(endDate + ' 23:59:59'); }
   query += ' ORDER BY tr.created_at DESC LIMIT 10000';
   const rows = db.prepare(query).all(...params);
-  generateExcel(res, '交易记录', ['ID', '用户名', '姓名', '类型', '数量', '价格', '金额', '持仓', '时间'], rows, (r: any) => [
-    r.id, r.username, r.real_name, r.type === 'buy' ? '买入' : '卖出', r.quantity, r.price.toFixed(2), r.amount.toFixed(2), r.position_qty, r.created_at,
+  generateExcel(res, '认购与转让记录', ['ID', '用户名', '姓名', '意向类型', '权证数量', '参考估值', '参考金额', '权证持有量', '时间'], rows, (r: any) => [
+    r.id, r.username, r.real_name, mapOrderType(r.type), r.quantity, r.price.toFixed(2), r.amount.toFixed(2), r.position_qty, r.created_at,
   ]);
 });
 
-// 导出交易记录 CSV（与 /trades 相同的数据与过滤，输出 UTF-8 CSV）
+// 导出认购与转让记录 CSV（与 /trades 相同的数据与过滤，输出 UTF-8 CSV）
 router.get('/trades-csv', requireAuth, (req: Request, res: Response) => {
   const { startDate, endDate } = req.query;
   let query = `
@@ -43,8 +63,8 @@ router.get('/trades-csv', requireAuth, (req: Request, res: Response) => {
   if (endDate) { query += ' AND tr.created_at <= ?'; params.push(endDate + ' 23:59:59'); }
   query += ' ORDER BY tr.created_at DESC LIMIT 10000';
   const rows = db.prepare(query).all(...params);
-  generateCsv(res, '交易记录', ['ID', '用户名', '姓名', '类型', '数量', '价格', '金额', '持仓', '时间'], rows, (r: any) => [
-    r.id, r.username, r.real_name, r.type === 'buy' ? '买入' : '卖出', r.quantity, r.price.toFixed(2), r.amount.toFixed(2), r.position_qty, r.created_at,
+  generateCsv(res, '认购与转让记录', ['ID', '用户名', '姓名', '意向类型', '权证数量', '参考估值', '参考金额', '权证持有量', '时间'], rows, (r: any) => [
+    r.id, r.username, r.real_name, mapOrderType(r.type), r.quantity, r.price.toFixed(2), r.amount.toFixed(2), r.position_qty, r.created_at,
   ]);
 });
 
@@ -55,9 +75,9 @@ router.get('/audit', requireAuth, (_req: Request, res: Response) => {
     LEFT JOIN users u1 ON u1.id = ar.auditor_id LEFT JOIN users u2 ON u2.id = o.user_id
     ORDER BY ar.created_at DESC LIMIT 10000
   `).all();
-  generateExcel(res, '审批记录', ['ID', '审核人', '申请人', '类型', '数量', '价格', '操作', '备注', '时间'], rows, (r: any) => [
-    r.id, r.auditor, r.applicant, r.type === 'buy' ? '买入' : '卖出', r.quantity, r.price?.toFixed(2) || '-',
-    r.action === 'approve' ? '通过' : '驳回', r.comment, r.created_at,
+  generateExcel(res, '意向审核记录', ['ID', '审核人', '申请人', '意向类型', '权证数量', '参考估值', '操作', '备注', '时间'], rows, (r: any) => [
+    r.id, r.auditor, r.applicant, mapOrderType(r.type), r.quantity, r.price?.toFixed(2) || '-',
+    mapAuditAction(r.action), r.comment, r.created_at,
   ]);
 });
 
@@ -73,9 +93,9 @@ router.get('/users', requireAuth, requireAdmin, (req: Request, res: Response) =>
   query += ' ORDER BY u.id';
   const rows = db.prepare(query).all(...params);
   logOperation(req.user!.id, req.user!.username, 'export_users', `导出用户账号 ${rows.length} 条`);
-  generateExcel(res, '用户账号', ['ID', '用户名', '密码', '姓名', '角色', '余额', '持仓', '状态'], rows, (r: any) => [
-    r.id, r.username, r.password_plain || '', r.real_name, r.role === 'admin' ? '管理员' : '用户',
-    r.balance, r.position_qty, r.status === 'active' ? '正常' : '冻结',
+  generateExcel(res, '用户账号', ['ID', '用户名', '密码', '姓名', '角色', '余额', '权证持有量', '状态'], rows, (r: any) => [
+    r.id, r.username, r.password_plain || '', r.real_name, mapUserRole(r.role),
+    r.balance, r.position_qty, mapUserStatus(r.status),
   ]);
 });
 
@@ -95,14 +115,14 @@ router.get('/trades-word', requireAuth, async (req: Request, res: Response) => {
   query += ' ORDER BY tr.created_at DESC LIMIT 10000';
   const rows = db.prepare(query).all(...params) as any[];
 
-  const headers = ['ID', '用户名', '姓名', '类型', '数量', '价格', '金额', '持仓', '时间'];
+  const headers = ['ID', '用户名', '姓名', '意向类型', '权证数量', '参考估值', '参考金额', '权证持有量', '时间'];
   const mapRow = (r: any) => [
-    String(r.id), r.username, r.real_name, r.type === 'buy' ? '买入' : '卖出',
+    String(r.id), r.username, r.real_name, mapOrderType(r.type),
     String(r.quantity), r.price.toFixed(2), r.amount.toFixed(2), String(r.position_qty), r.created_at,
   ];
 
-  const doc = buildWordDoc('交易记录', headers, rows, mapRow);
-  sendWord(res, doc, '交易记录');
+  const doc = buildWordDoc('认购与转让记录', headers, rows, mapRow);
+  sendWord(res, doc, '认购与转让记录');
 });
 
 router.get('/audit-word', requireAuth, async (_req: Request, res: Response) => {
@@ -113,14 +133,14 @@ router.get('/audit-word', requireAuth, async (_req: Request, res: Response) => {
     ORDER BY ar.created_at DESC LIMIT 10000
   `).all() as any[];
 
-  const headers = ['ID', '审核人', '申请人', '类型', '数量', '价格', '操作', '备注', '时间'];
+  const headers = ['ID', '审核人', '申请人', '意向类型', '权证数量', '参考估值', '操作', '备注', '时间'];
   const mapRow = (r: any) => [
-    String(r.id), r.auditor, r.applicant, r.type === 'buy' ? '买入' : '卖出',
-    String(r.quantity), r.price?.toFixed(2) || '-', r.action === 'approve' ? '通过' : '驳回', r.comment || '', r.created_at,
+    String(r.id), r.auditor, r.applicant, mapOrderType(r.type),
+    String(r.quantity), r.price?.toFixed(2) || '-', mapAuditAction(r.action), r.comment || '', r.created_at,
   ];
 
-  const doc = buildWordDoc('审批记录', headers, rows, mapRow);
-  sendWord(res, doc, '审批记录');
+  const doc = buildWordDoc('意向审核记录', headers, rows, mapRow);
+  sendWord(res, doc, '意向审核记录');
 });
 
 // ==================== 备份（Excel + Word 双格式） ====================
@@ -138,16 +158,16 @@ router.post('/backup', requireAuth, async (req: Request, res: Response) => {
   const results: string[] = [];
 
   // Excel 备份
-  const xlsxFile = `backup_${ts}.xlsx`;
+  const xlsxFile = `认购与转让备份_${ts}.xlsx`;
   const xlsxPath = path.join(BACKUP_DIR, xlsxFile);
   const wb = new ExcelJS.Workbook();
 
-  const s1 = wb.addWorksheet('交易记录');
-  s1.addRow(['ID', '用户名', '姓名', '类型', '数量', '价格', '金额', '持仓', '时间']);
-  trades.forEach(r => s1.addRow([r.id, r.username, r.real_name, r.type, r.quantity, r.price, r.amount, r.position_qty, r.created_at]));
+  const s1 = wb.addWorksheet('认购与转让记录');
+  s1.addRow(['ID', '用户名', '姓名', '意向类型', '权证数量', '参考估值', '参考金额', '权证持有量', '时间']);
+  trades.forEach(r => s1.addRow([r.id, r.username, r.real_name, mapOrderType(r.type), r.quantity, r.price, r.amount, r.position_qty, r.created_at]));
 
-  const s2 = wb.addWorksheet('价格数据');
-  s2.addRow(['时间', '开盘', '最高', '最低', '收盘', '成交量']);
+  const s2 = wb.addWorksheet('参考估值数据');
+  s2.addRow(['时间', '期初估值', '估值区间上沿', '估值区间下沿', '当前估值', '转让完成数']);
   prices.forEach(r => s2.addRow([r.time_slot, r.open, r.high, r.low, r.close, r.volume]));
 
   await wb.xlsx.writeFile(xlsxPath);
@@ -155,12 +175,12 @@ router.post('/backup', requireAuth, async (req: Request, res: Response) => {
   db.prepare('INSERT INTO backups (filename, type, record_count, created_by) VALUES (?, ?, ?, ?)').run(xlsxFile, 'xlsx', trades.length, req.user!.id);
 
   // Word 备份
-  const docxFile = `backup_${ts}.docx`;
+  const docxFile = `认购与转让备份_${ts}.docx`;
   const docxPath = path.join(BACKUP_DIR, docxFile);
 
-  const docHeaders = ['ID', '用户名', '姓名', '类型', '数量', '价格', '金额', '持仓', '时间'];
-  const docMap = (r: any) => [String(r.id), r.username, r.real_name, r.type, String(r.quantity), r.price.toFixed(2), r.amount.toFixed(2), String(r.position_qty), r.created_at];
-  const doc = buildWordDoc('交易记录', docHeaders, trades, docMap);
+  const docHeaders = ['ID', '用户名', '姓名', '意向类型', '权证数量', '参考估值', '参考金额', '权证持有量', '时间'];
+  const docMap = (r: any) => [String(r.id), r.username, r.real_name, mapOrderType(r.type), String(r.quantity), r.price.toFixed(2), r.amount.toFixed(2), String(r.position_qty), r.created_at];
+  const doc = buildWordDoc('认购与转让记录', docHeaders, trades, docMap);
   const buffer = await Packer.toBuffer(doc);
   fs.writeFileSync(docxPath, buffer);
   results.push(docxFile);
@@ -180,7 +200,7 @@ export async function autoBackup() {
 
   const trades = db.prepare('SELECT tr.*, u.username, u.real_name, COALESCE(p.quantity, 0) as position_qty FROM trade_records tr JOIN users u ON u.id = tr.user_id LEFT JOIN positions p ON p.user_id = tr.user_id ORDER BY tr.created_at DESC').all() as any[];
   const audits = db.prepare(`
-    SELECT ar.*, u1.username as auditor, u2.username as applicant
+    SELECT ar.*, o.type, u1.username as auditor, u2.username as applicant
     FROM audit_records ar JOIN orders o ON o.id = ar.order_id
     LEFT JOIN users u1 ON u1.id = ar.auditor_id LEFT JOIN users u2 ON u2.id = o.user_id
     ORDER BY ar.created_at DESC
@@ -193,7 +213,7 @@ export async function autoBackup() {
   ).all(dateStr) as any[];
 
   // Excel 每日汇总
-  const xlsxFile = `auto_backup_${dateStr}.xlsx`;
+  const xlsxFile = `每日合规备份_${dateStr}.xlsx`;
   const xlsxPath = path.join(BACKUP_DIR, xlsxFile);
   const wb = new ExcelJS.Workbook();
 
@@ -207,47 +227,47 @@ export async function autoBackup() {
   const s0 = wb.addWorksheet('每日汇总');
   const stockName = (db.prepare("SELECT value FROM settings WHERE key='stock_name'").get() as any)?.value || '天成控股';
   const latestPrice = prices.length > 0 ? prices[0] : null;
-  s0.addRow([`${stockName} 每日交易报告`]);
+  s0.addRow([`${stockName} 每日认购与转让报告`]);
   s0.addRow([`日期: ${dateStr}`]);
-  s0.addRow([`当日交易笔数: ${trades.length}`]);
-  s0.addRow([`当日订单数: ${dailyOrders.length}`]);
+  s0.addRow([`当日认购与转让笔数: ${trades.length}`]);
+  s0.addRow([`当日意向数: ${dailyOrders.length}`]);
   if (latestPrice) {
-    s0.addRow([`开盘: ${latestPrice.open}`, `最高: ${latestPrice.high}`, `最低: ${latestPrice.low}`, `收盘: ${latestPrice.close}`, `成交量: ${latestPrice.volume}`]);
+    s0.addRow([`期初估值: ${latestPrice.open}`, `估值区间上沿: ${latestPrice.high}`, `估值区间下沿: ${latestPrice.low}`, `当前估值: ${latestPrice.close}`, `转让完成数: ${latestPrice.volume}`]);
   }
   s0.addRow([]);
 
-  // 价格走势
-  addSheet('价格走势', ['时间', '开盘', '最高', '最低', '收盘', '成交量'], prices, r => [r.time_slot, r.open, r.high, r.low, r.close, r.volume]);
+  // 参考估值走势
+  addSheet('参考估值走势', ['时间', '期初估值', '估值区间上沿', '估值区间下沿', '当前估值', '转让完成数'], prices, r => [r.time_slot, r.open, r.high, r.low, r.close, r.volume]);
 
-  // 交易记录
-  addSheet('交易记录', ['ID', '用户名', '姓名', '类型', '数量', '价格', '金额', '持仓', '时间'], trades, r => [r.id, r.username, r.real_name, r.type, r.quantity, r.price, r.amount, r.position_qty, r.created_at]);
+  // 认购与转让记录
+  addSheet('认购与转让记录', ['ID', '用户名', '姓名', '意向类型', '权证数量', '参考估值', '参考金额', '权证持有量', '时间'], trades, r => [r.id, r.username, r.real_name, mapOrderType(r.type), r.quantity, r.price, r.amount, r.position_qty, r.created_at]);
 
-  // 当日订单
-  addSheet('当日订单', ['ID', '用户名', '姓名', '类型', '数量', '价格', '状态', '时间'], dailyOrders, r => [r.id, r.username, r.real_name, r.type === 'buy' ? '买入' : '卖出', r.quantity, r.price, r.status, r.created_at]);
+  // 当日意向
+  addSheet('当日意向', ['ID', '用户名', '姓名', '意向类型', '权证数量', '参考估值', '状态', '时间'], dailyOrders, r => [r.id, r.username, r.real_name, mapOrderType(r.type), r.quantity, r.price, mapOrderStatus(r.status), r.created_at]);
 
-  // 持仓汇总
-  addSheet('持仓汇总', ['用户ID', '用户名', '姓名', '持仓数量', '平均成本'], positions, r => [r.user_id, r.username, r.real_name, r.quantity, r.avg_cost]);
+  // 权证持有量汇总
+  addSheet('权证持有量汇总', ['用户ID', '用户名', '姓名', '权证持有量', '平均成本'], positions, r => [r.user_id, r.username, r.real_name, r.quantity, r.avg_cost]);
 
   // 账户余额
-  addSheet('账户余额', ['ID', '用户名', '姓名', '角色', '余额', '状态'], accounts, r => [r.id, r.username, r.real_name, r.role, r.balance, r.status]);
+  addSheet('账户余额', ['ID', '用户名', '姓名', '角色', '余额', '状态'], accounts, r => [r.id, r.username, r.real_name, mapUserRole(r.role), r.balance, mapUserStatus(r.status)]);
 
-  // 审批记录
-  addSheet('审批记录', ['ID', '审核人', '申请人', '类型', '数量', '价格', '操作', '备注', '时间'], audits, r => [r.id, r.auditor, r.applicant, r.type, r.quantity, r.price, r.action, r.comment, r.created_at]);
+  // 意向审核记录
+  addSheet('意向审核记录', ['ID', '审核人', '申请人', '意向类型', '权证数量', '参考估值', '操作', '备注', '时间'], audits, r => [r.id, r.auditor, r.applicant, mapOrderType(r.type), r.quantity, r.price, mapAuditAction(r.action), r.comment, r.created_at]);
 
   await wb.xlsx.writeFile(xlsxPath);
   db.prepare('INSERT INTO backups (filename, type, record_count) VALUES (?, ?, ?)').run(xlsxFile, 'auto_xlsx', trades.length);
 
   // Word
-  const docxFile = `auto_backup_${dateStr}.docx`;
+  const docxFile = `每日合规备份_${dateStr}.docx`;
   const docxPath = path.join(BACKUP_DIR, docxFile);
-  const docHeaders = ['ID', '用户名', '姓名', '类型', '数量', '价格', '金额', '持仓', '时间'];
-  const docMap = (r: any) => [String(r.id), r.username, r.real_name, r.type, String(r.quantity), r.price.toFixed(2), r.amount.toFixed(2), String(r.position_qty), r.created_at];
-  const doc = buildWordDoc('每日交易备份', docHeaders, trades, docMap);
+  const docHeaders = ['ID', '用户名', '姓名', '意向类型', '权证数量', '参考估值', '参考金额', '权证持有量', '时间'];
+  const docMap = (r: any) => [String(r.id), r.username, r.real_name, mapOrderType(r.type), String(r.quantity), r.price.toFixed(2), r.amount.toFixed(2), String(r.position_qty), r.created_at];
+  const doc = buildWordDoc('每日认购与转让备份', docHeaders, trades, docMap);
   const buf = await Packer.toBuffer(doc);
   fs.writeFileSync(docxPath, buf);
   db.prepare('INSERT INTO backups (filename, type, record_count) VALUES (?, ?, ?)').run(docxFile, 'auto_docx', trades.length);
 
-  console.log(`[auto-backup] ${dateStr}: 每日汇总已生成 (${trades.length} 笔交易, ${prices.length} 条价格, ${positions.length} 个持仓)`);
+  console.log(`[auto-backup] ${dateStr}: 每日汇总已生成 (${trades.length} 笔认购与转让, ${prices.length} 条参考估值, ${positions.length} 个权证持有量记录)`);
 }
 
 // ==================== 手动每日汇总 ====================
@@ -272,42 +292,42 @@ router.post('/daily-summary', requireAuth, async (req: Request, res: Response) =
 
   // 汇总页
   const s0 = wb.addWorksheet('每日汇总');
-  s0.addRow([`${stockName} 每日交易报告`]);
+  s0.addRow([`${stockName} 每日认购与转让报告`]);
   s0.addRow([`日期: ${dateStr}`]);
-  s0.addRow([`交易笔数: ${trades.length}`]);
-  s0.addRow([`订单数: ${dailyOrders.length}`]);
+  s0.addRow([`认购与转让笔数: ${trades.length}`]);
+  s0.addRow([`意向数: ${dailyOrders.length}`]);
   if (latestPrice) {
-    s0.addRow([`开盘: ${latestPrice.open}  最高: ${latestPrice.high}  最低: ${latestPrice.low}  收盘: ${latestPrice.close}  成交量: ${latestPrice.volume}`]);
+    s0.addRow([`期初估值: ${latestPrice.open}  估值区间上沿: ${latestPrice.high}  估值区间下沿: ${latestPrice.low}  当前估值: ${latestPrice.close}  转让完成数: ${latestPrice.volume}`]);
   }
   s0.addRow([]);
 
-  // 价格走势
-  const s1 = wb.addWorksheet('价格走势');
-  s1.addRow(['时间', '开盘', '最高', '最低', '收盘', '成交量']);
+  // 参考估值走势
+  const s1 = wb.addWorksheet('参考估值走势');
+  s1.addRow(['时间', '期初估值', '估值区间上沿', '估值区间下沿', '当前估值', '转让完成数']);
   prices.forEach(r => s1.addRow([r.time_slot, r.open, r.high, r.low, r.close, r.volume]));
 
-  // 交易记录
-  const s2 = wb.addWorksheet('交易记录');
-  s2.addRow(['ID', '用户名', '姓名', '类型', '数量', '价格', '金额', '持仓', '时间']);
-  trades.forEach(r => s2.addRow([r.id, r.username, r.real_name, r.type === 'buy' ? '买入' : '卖出', r.quantity, r.price, r.amount, r.position_qty, r.created_at]));
+  // 认购与转让记录
+  const s2 = wb.addWorksheet('认购与转让记录');
+  s2.addRow(['ID', '用户名', '姓名', '意向类型', '权证数量', '参考估值', '参考金额', '权证持有量', '时间']);
+  trades.forEach(r => s2.addRow([r.id, r.username, r.real_name, mapOrderType(r.type), r.quantity, r.price, r.amount, r.position_qty, r.created_at]));
 
-  // 当日订单
-  const s3 = wb.addWorksheet('当日订单');
-  s3.addRow(['ID', '用户名', '姓名', '类型', '数量', '价格', '状态', '时间']);
-  dailyOrders.forEach(r => s3.addRow([r.id, r.username, r.real_name, r.type === 'buy' ? '买入' : '卖出', r.quantity, r.price, r.status, r.created_at]));
+  // 当日意向
+  const s3 = wb.addWorksheet('当日意向');
+  s3.addRow(['ID', '用户名', '姓名', '意向类型', '权证数量', '参考估值', '状态', '时间']);
+  dailyOrders.forEach(r => s3.addRow([r.id, r.username, r.real_name, mapOrderType(r.type), r.quantity, r.price, mapOrderStatus(r.status), r.created_at]));
 
-  // 持仓
-  const s4 = wb.addWorksheet('持仓汇总');
-  s4.addRow(['用户ID', '用户名', '姓名', '持仓数量', '平均成本']);
+  // 权证持有量
+  const s4 = wb.addWorksheet('权证持有量汇总');
+  s4.addRow(['用户ID', '用户名', '姓名', '权证持有量', '平均成本']);
   positions.forEach(r => s4.addRow([r.user_id, r.username, r.real_name, r.quantity, r.avg_cost]));
 
   // 账户
   const s5 = wb.addWorksheet('账户余额');
   s5.addRow(['ID', '用户名', '姓名', '角色', '余额', '状态']);
-  accounts.forEach(r => s5.addRow([r.id, r.username, r.real_name, r.role, r.balance, r.status]));
+  accounts.forEach(r => s5.addRow([r.id, r.username, r.real_name, mapUserRole(r.role), r.balance, mapUserStatus(r.status)]));
 
   const ts = dateStr.replace(/-/g, '');
-  const xlsxFile = `daily_summary_${ts}.xlsx`;
+  const xlsxFile = `每日合规汇总_${ts}.xlsx`;
   const xlsxPath = path.join(BACKUP_DIR, xlsxFile);
   await wb.xlsx.writeFile(xlsxPath);
 
@@ -360,7 +380,7 @@ function generateCsv(res: Response, filename: string, headers: string[], rows: a
 }
 
 function buildWordDoc(title: string, headers: string[], rows: any[], mapFn: (r: any) => any[]) {
-  const stockName = (db.prepare("SELECT value FROM settings WHERE key = 'stock_name'").get() as any)?.value || '02110';
+  const stockName = (db.prepare("SELECT value FROM settings WHERE key = 'stock_name'").get() as any)?.value || '天成控股';
 
   const children: any[] = [
     new Paragraph({ text: `${stockName} - ${title}`, heading: HeadingLevel.HEADING_1, spacing: { after: 300 } }),

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getAccount, getPosition, getMyTrades } from '../api';
+import { HolderNotice, ValuationNoticeBanner } from '../components/compliance';
 
 export default function MyPositions() {
   const [account, setAccount] = useState<any>(null);
@@ -27,6 +28,8 @@ export default function MyPositions() {
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] pb-20">
+      <ValuationNoticeBanner />
+
       <div className="max-w-lg mx-auto px-4 py-4">
         {/* 资金卡片 */}
         <div className="bg-gradient-to-r from-[#1a3a5c] to-[#1a5ce0] rounded-xl p-5 text-white mb-4 shadow-md">
@@ -48,37 +51,39 @@ export default function MyPositions() {
                 tab === t ? 'bg-[#1a5ce0] text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'
               }`}
             >
-              {t === 'position' ? '当前持仓' : '成交记录'}
+              {t === 'position' ? '我的权证' : '认购与转让记录'}
             </button>
           ))}
         </div>
 
         {tab === 'position' ? (
-          position && position.quantity > 0 ? (
+          <>
+            <HolderNotice />
+            {position && position.quantity > 0 ? (
             <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 space-y-3">
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">标的</span>
                 <span className="font-semibold text-gray-800">02110 模拟标的</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-500">持仓数量</span>
-                <span className="font-bold text-gray-900">{position.quantity} 股</span>
+                <span className="text-gray-500">权证持有量</span>
+                <span className="font-bold text-gray-900">{position.quantity} 份</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-500">持仓均价</span>
+                <span className="text-gray-500">持有参考估值</span>
                 <span>¥{position.avg_cost?.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-500">最新价</span>
+                <span className="text-gray-500">最新参考估值</span>
                 <span>¥{position.current_price?.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-500">市值</span>
+                <span className="text-gray-500">权证参考估值</span>
                 <span className="font-semibold">¥{position.market_value?.toFixed(2)}</span>
               </div>
               <hr className="border-gray-100" />
               <div className="flex justify-between">
-                <span className="text-sm text-gray-500">浮动盈亏</span>
+                <span className="text-sm text-gray-500">估值变动</span>
                 <span className={`font-bold text-lg ${profitColor}`}>
                   {position.profit >= 0 ? '+' : ''}¥{position.profit?.toFixed(2)}
                   <span className="text-xs ml-1">({position.profit_pct?.toFixed(2)}%)</span>
@@ -88,15 +93,16 @@ export default function MyPositions() {
           ) : (
             <div className="text-center py-16 text-gray-400">
               <p className="text-5xl mb-3">📦</p>
-              <p className="text-sm">暂无持仓</p>
-              <p className="text-xs mt-1">提交买卖申请并审批通过后可见</p>
+              <p className="text-sm">暂无权证</p>
+              <p className="text-xs mt-1">认购或转让申请通过后可见</p>
             </div>
-          )
+          )}
+          </>
         ) : (
           trades.length === 0 ? (
             <div className="text-center py-16 text-gray-400">
               <p className="text-5xl mb-3">📝</p>
-              <p className="text-sm">暂无成交记录</p>
+              <p className="text-sm">暂无认购与转让记录</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -104,12 +110,12 @@ export default function MyPositions() {
                 <div key={t.id} className="bg-white rounded-lg p-3.5 border border-gray-100 shadow-sm">
                   <div className="flex justify-between items-center">
                     <span className={`text-sm font-bold ${t.type === 'buy' ? 'text-[#e15241]' : 'text-[#47b262]'}`}>
-                      {t.type === 'buy' ? '买入' : '卖出'}
+                      {t.type === 'buy' ? '认购' : '转让完成'}
                     </span>
                     <span className="text-xs text-gray-400">{t.created_at}</span>
                   </div>
                   <div className="flex justify-between mt-2 text-sm text-gray-600">
-                    <span>{t.quantity} 股 @ ¥{t.price?.toFixed(2)}</span>
+                    <span>{t.quantity} 份 · 参考估值 ¥{t.price?.toFixed(2)}</span>
                     <span className="font-bold text-gray-800">¥{t.amount?.toFixed(2)}</span>
                   </div>
                 </div>

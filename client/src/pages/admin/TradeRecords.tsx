@@ -3,6 +3,7 @@ import {
   getTradeRecords, exportTrades, exportTradesWord, exportTradesCsv, exportAudit, exportAuditWord,
   backupTrades, getBackupList, downloadBackup, getSettings, updateSettings, getStockInfo,
 } from '../../api';
+import { ValuationNoticeBanner } from '../../components/compliance';
 
 export default function TradeRecords() {
   const [records, setRecords] = useState<any[]>([]);
@@ -63,7 +64,7 @@ export default function TradeRecords() {
       const map: any = {};
       sRes.data.forEach((s: any) => { map[s.key] = s.value; });
       setStockCode(map.stock_code || '02110');
-      setStockName(map.stock_name || '模拟标的');
+      setStockName(map.stock_name || '天成控股');
       setBackupTime(map.backup_time || '23:00');
       setShowSettings(true);
     } catch { /* ignore */ }
@@ -92,12 +93,14 @@ export default function TradeRecords() {
 
   return (
     <div className="max-w-lg mx-auto px-4 py-4">
+      <ValuationNoticeBanner />
+
       <div className="flex justify-between items-center mb-4">
-        <h1 className="text-xl font-bold">交易记录</h1>
+        <h1 className="text-xl font-bold">认购与转让记录</h1>
         <div className="flex gap-1 flex-wrap justify-end">
-          <button onClick={doExport(exportTrades, '交易记录Excel')} className="px-2 py-1.5 bg-blue-600 text-white rounded text-xs font-medium">Excel</button>
-          <button onClick={doExport(exportTradesCsv, '交易记录CSV')} className="px-2 py-1.5 bg-teal-600 text-white rounded text-xs font-medium">CSV</button>
-          <button onClick={doExport(exportTradesWord, '交易记录Word')} className="px-2 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium">Word</button>
+          <button onClick={doExport(exportTrades, '认购与转让记录Excel')} className="px-2 py-1.5 bg-blue-600 text-white rounded text-xs font-medium">Excel</button>
+          <button onClick={doExport(exportTradesCsv, '认购与转让记录CSV')} className="px-2 py-1.5 bg-teal-600 text-white rounded text-xs font-medium">CSV</button>
+          <button onClick={doExport(exportTradesWord, '认购与转让记录Word')} className="px-2 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium">Word</button>
           <button onClick={handleBackup} className="px-2 py-1.5 bg-green-600 text-white rounded text-xs font-medium">备份</button>
           <button onClick={loadBackups} className="px-2 py-1.5 bg-gray-600 text-white rounded text-xs font-medium">历史</button>
           <button onClick={loadSettings} className="px-2 py-1.5 bg-orange-500 text-white rounded text-xs font-medium">设置</button>
@@ -167,7 +170,7 @@ export default function TradeRecords() {
       {loading ? (
         <p className="text-gray-500 text-center py-8">加载中...</p>
       ) : records.length === 0 ? (
-        <div className="text-center py-12 text-gray-400"><p className="text-4xl mb-2">📝</p><p>暂无交易记录</p></div>
+        <div className="text-center py-12 text-gray-400"><p className="text-4xl mb-2">📝</p><p>暂无认购与转让记录</p></div>
       ) : (
         <div>
           <div className="space-y-2">
@@ -175,7 +178,7 @@ export default function TradeRecords() {
               <div key={r.id} className="bg-white rounded-lg p-3 shadow-sm border text-sm">
                 <div className="flex justify-between">
                   <span className={`font-bold ${r.type === 'buy' ? 'text-red-600' : 'text-green-600'}`}>
-                    {r.type === 'buy' ? '买入' : '卖出'}
+                    {r.type === 'buy' ? '认购' : '申请转让'}
                   </span>
                   <span className="text-xs text-gray-400">{r.created_at}</span>
                 </div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getHKList } from '../api';
+import { ValuationNoticeBanner } from '../components/compliance';
 
 interface StockItem {
   code: string;
@@ -151,10 +152,12 @@ export default function HKMarket() {
   /* ---------- main render ---------- */
   return (
     <div className="min-h-screen bg-[#f0f2f5] pb-20">
+      <ValuationNoticeBanner />
+
       {/* 顶栏 */}
       <div className="bg-white border-b border-gray-100 px-4 py-3">
         <div className="max-w-full mx-auto flex items-center justify-between">
-          <h1 className="text-base font-bold text-gray-800">港股行情</h1>
+          <h1 className="text-base font-bold text-gray-800">公共港股信息查询</h1>
           <span className="text-[10px] text-gray-400">
             {lastUpdate ? `更新于 ${lastUpdate}` : '加载中...'}
           </span>
@@ -186,13 +189,13 @@ export default function HKMarket() {
           {/* 表头 */}
           <div className="flex items-center px-3 py-2 bg-gray-50/70 text-[10px] font-medium text-gray-400 whitespace-nowrap">
             <span className="w-[110px] shrink-0">股票</span>
-            <span className="w-[70px] shrink-0 text-right">最新价</span>
-            <span className="w-[72px] shrink-0 text-right">涨跌幅</span>
+            <span className="w-[70px] shrink-0 text-right">参考估值</span>
+            <span className="w-[72px] shrink-0 text-right">估值变动</span>
             <span className="w-[58px] shrink-0 text-right">涨速</span>
             <span className="w-[58px] shrink-0 text-right">换手</span>
             <span className="w-[48px] shrink-0 text-right">量比</span>
             <span className="w-[62px] shrink-0 text-right">振幅</span>
-            <span className="w-[75px] shrink-0 text-right">成交额</span>
+            <span className="w-[75px] shrink-0 text-right">转让参考金额</span>
             <span className="w-[80px] shrink-0 text-right">流通市值</span>
             <span className="w-[58px] shrink-0 text-right">市盈率</span>
           </div>

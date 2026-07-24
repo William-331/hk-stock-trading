@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getDashboard } from '../../api';
+import { ValuationNoticeBanner } from '../../components/compliance';
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
@@ -17,14 +18,16 @@ export default function AdminDashboard() {
   const cards = [
     { label: '用户数', value: data.userCount, color: 'bg-blue-500' },
     { label: '待审核', value: data.pendingCount, color: 'bg-yellow-500' },
-    { label: '成交笔数', value: data.tradeCount, color: 'bg-green-500' },
-    { label: '成交总额', value: '¥' + (data.totalAmount || 0).toFixed(0), color: 'bg-purple-500' },
+    { label: '认购与转让完成笔数', value: data.tradeCount, color: 'bg-green-500' },
+    { label: '参考金额', value: '¥' + (data.totalAmount || 0).toFixed(0), color: 'bg-purple-500' },
   ];
 
   const recent = data.recentPending || [];
 
   return (
     <div className="max-w-lg mx-auto px-4 py-4">
+      <ValuationNoticeBanner />
+
       <h1 className="text-xl font-bold mb-4">控制台</h1>
 
       {/* 全局统计 */}
@@ -37,16 +40,16 @@ export default function AdminDashboard() {
         ))}
       </div>
 
-      {/* 今日成交概况 */}
+      {/* 今日认购与转让概况 */}
       <div className="mt-4 bg-white border rounded-xl p-4">
-        <p className="text-sm font-medium text-gray-700 mb-3">今日成交概况</p>
+        <p className="text-sm font-medium text-gray-700 mb-3">今日认购与转让概况</p>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <p className="text-xs text-gray-400">今日成交笔数</p>
+            <p className="text-xs text-gray-400">认购与转让完成笔数</p>
             <p className="text-xl font-bold text-gray-800 mt-0.5">{data.todayTradeCount || 0}</p>
           </div>
           <div>
-            <p className="text-xs text-gray-400">今日成交额</p>
+            <p className="text-xs text-gray-400">参考金额</p>
             <p className="text-xl font-bold text-gray-800 mt-0.5">¥{(data.todayAmount || 0).toFixed(0)}</p>
           </div>
         </div>
@@ -72,7 +75,7 @@ export default function AdminDashboard() {
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={`text-xs px-1.5 py-0.5 rounded font-medium shrink-0 ${o.type === 'buy' ? 'bg-red-50 text-[#e15241]' : 'bg-green-50 text-[#47b262]'}`}>
-                    {o.type === 'buy' ? '买入' : '卖出'}
+                    {o.type === 'buy' ? '认购' : '申请转让'}
                   </span>
                   <span className="text-sm text-gray-700 truncate">{o.real_name || o.username}</span>
                 </div>

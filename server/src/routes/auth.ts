@@ -1,10 +1,15 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import db from '../db';
+import db, { logOperation } from '../db';
 import { JWT_SECRET, requireAuth } from '../middleware/auth';
 
 const router = Router();
+const COMPLIANCE_NOTICE_VERSION = '2026-07-v2';
+
+function validateComplianceVersion(version: unknown): version is string {
+  return version === COMPLIANCE_NOTICE_VERSION;
+}
 
 // 登录
 router.post('/login', (req: Request, res: Response) => {
@@ -69,6 +74,50 @@ router.post('/register', (req: Request, res: Response) => {
   db.prepare('INSERT INTO positions (user_id, quantity, avg_cost) VALUES (?, 0, 0)').run(result.lastInsertRowid);
 
   res.json({ message: '注册成功' });
+});
+
+// 查询当前合规声明版本的知晓记录
+router.get('/compliance-status', requireAuth, (req: Request, res: Response) => {
+  const version = req.query.version;
+  if (!validateComplianceVersion(version)) {
+    return res.status(400).json({ error: '合规声明版本无效' });
+  }
+
+  const row = db.prepare(
+    'SELECT acknowledged_at FROM compliance_acknowledgements WHERE user_id = ? AND notice_version = ?'
+  ).get(req.user!.id, version) as any;
+
+  res.json({
+    version,
+    acknowledged: !!row,
+    acknowledgedAt: row?.acknowledged_at || null,
+  });
+});
+
+// 确认知晓当前合规声明（同一用户、同一版本只记录一次）
+router.post('/compliance-acknowledge', requireAuth, (req: Request, res: Response) => {
+  const { version } = req.body;
+  if (!validateComplianceVersion(version)) {
+    return res.status(400).json({ error: '合规声明版本无效' });
+  }
+
+  const result = db.prepare(
+    'INSERT OR IGNORE INTO compliance_acknowledgements (user_id, notice_version) VALUES (?, ?)'
+  ).run(req.user!.id, version);
+
+  const row = db.prepare(
+    'SELECT acknowledged_at FROM compliance_acknowledgements WHERE user_id = ? AND notice_version = ?'
+  ).get(req.user!.id, version) as any;
+
+  if (result.changes > 0) {
+    logOperation(req.user!.id, req.user!.username, 'acknowledge_compliance', `确认合规声明版本 ${version}`);
+  }
+
+  res.json({
+    version,
+    acknowledged: true,
+    acknowledgedAt: row.acknowledged_at,
+  });
 });
 
 // 修改密码（登录用户本人）

@@ -4,19 +4,19 @@ import { requireAuth } from '../middleware/auth';
 
 const router = Router();
 
-// 提交买卖申请
+// 提交认购或申请转让
 router.post('/', requireAuth, (req: Request, res: Response) => {
   const { type, quantity, price } = req.body;
   const userId = req.user!.id;
 
   if (!type || !['buy', 'sell'].includes(type)) {
-    return res.status(400).json({ error: '类型必须是 buy 或 sell' });
+    return res.status(400).json({ error: '类型必须是认购或申请转让' });
   }
   if (!quantity || quantity <= 0 || !Number.isInteger(quantity)) {
     return res.status(400).json({ error: '数量必须是正整数' });
   }
   if (!price || price <= 0) {
-    return res.status(400).json({ error: '价格必须大于0' });
+    return res.status(400).json({ error: '参考估值必须大于0' });
   }
 
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
@@ -24,15 +24,15 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
     return res.status(403).json({ error: '账户不可用' });
   }
 
-  // 卖出时检查持仓
+  // 申请转让时检查权证持有量
   if (type === 'sell') {
     const pos = db.prepare('SELECT * FROM positions WHERE user_id = ?').get(userId) as any;
     if (!pos || pos.quantity < quantity) {
-      return res.status(400).json({ error: `持仓不足，当前持仓 ${pos?.quantity || 0} 股` });
+      return res.status(400).json({ error: `权证持有量不足，当前权证持有量 ${pos?.quantity || 0} 股` });
     }
   }
 
-  // 买入时检查余额
+  // 认购时检查余额
   if (type === 'buy') {
     const totalAmount = quantity * price;
     if (user.balance < totalAmount) {
@@ -46,7 +46,8 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
     'INSERT INTO orders (user_id, type, quantity, price) VALUES (?, ?, ?, ?)'
   ).run(userId, type, quantity, price);
 
-  logOperation(userId, req.user!.username, 'submit_order', `${type} ${quantity}股 @${price}`);
+  const typeLabel = type === 'buy' ? '认购' : '申请转让';
+  logOperation(userId, req.user!.username, 'submit_order', `${typeLabel} ${quantity}股，参考估值 ${price}`);
 
   res.json({ id: result.lastInsertRowid, message: '申请已提交，等待审核' });
 });
@@ -88,7 +89,8 @@ router.post('/:id/cancel', requireAuth, (req: Request, res: Response) => {
   }
 
   db.prepare('DELETE FROM orders WHERE id = ?').run(order.id);
-  logOperation(userId, req.user!.username, 'cancel_order', `${order.type} ${order.quantity}股 @${order.price}`);
+  const typeLabel = order.type === 'buy' ? '认购' : '申请转让';
+  logOperation(userId, req.user!.username, 'cancel_order', `${typeLabel} ${order.quantity}股，参考估值 ${order.price}`);
 
   res.json({ message: '申请已撤销' });
 });

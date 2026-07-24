@@ -234,6 +234,7 @@ app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   }
   try {
     db.prepare('DELETE FROM audit_records WHERE order_id IN (SELECT id FROM orders WHERE user_id = ?)').run(userId);
+    db.prepare('DELETE FROM compliance_acknowledgements WHERE user_id = ?').run(userId);
     db.prepare('DELETE FROM trade_records WHERE user_id = ?').run(userId);
     db.prepare('DELETE FROM orders WHERE user_id = ?').run(userId);
     db.prepare('DELETE FROM positions WHERE user_id = ?').run(userId);

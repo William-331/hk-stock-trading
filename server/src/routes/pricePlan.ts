@@ -52,7 +52,7 @@ function isTradingTime(timeStr: string): boolean {
 //
 // 逻辑（可完整解释给运营看）：
 //   1. 关键锚点：开盘(第0点) / 收盘(末点) 必有；若给了当日最高/最低价，它们也是锚点，
-//      并可由 opts.highIdx / lowIdx 精确指定出现在第几个5分钟点（留空则系统在盘中随机安排）。
+//      并可由 opts.highIdx / lowIdx 精确指定出现在第几个30分钟点（留空则系统在盘中随机安排）。
 //   2. 基线：把这些锚点按时间顺序用「折线」连起来 —— 锚点时刻的价格精确命中设定值，
 //      锚点之间线性过渡（例：开盘→盘中最低→盘中最高→收盘）。
 //   3. 波动：在折线基线上叠加分段布朗桥噪声（每个锚点处噪声归零，保证锚点不被扰动）。
@@ -253,16 +253,16 @@ router.get('/', requireAuth, (req: Request, res: Response) => {
 router.post('/daily', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const { date, open, close, volUp, volDown, high, low } = req.body;
   if (!date || !open || !close) {
-    return res.status(400).json({ error: '日期、开盘价、收盘价必填' });
+    return res.status(400).json({ error: '日期、期初估值、当前估值必填' });
   }
 
   if (isWeekend(date)) {
-    return res.status(400).json({ error: '周末不可设定交易计划' });
+    return res.status(400).json({ error: '周末不可设定参考估值计划' });
   }
 
   const slots = tradingSlots(date).filter(isTradingTime);
   if (slots.length === 0) {
-    return res.status(400).json({ error: '该日期无有效交易时段' });
+    return res.status(400).json({ error: '该日期无有效估值展示时段' });
   }
 
   const up = volUp !== undefined ? Number(volUp) : 1.0;
@@ -272,20 +272,20 @@ router.post('/daily', requireAuth, requireAdmin, (req: Request, res: Response) =
   const dayHigh = high !== undefined && high !== '' ? Number(high) : undefined;
   const dayLow = low !== undefined && low !== '' ? Number(low) : undefined;
   if (dayHigh !== undefined && (!Number.isFinite(dayHigh) || dayHigh <= 0)) {
-    return res.status(400).json({ error: '当日最高价无效' });
+    return res.status(400).json({ error: '估值区间上沿无效' });
   }
   if (dayLow !== undefined && (!Number.isFinite(dayLow) || dayLow <= 0)) {
-    return res.status(400).json({ error: '当日最低价无效' });
+    return res.status(400).json({ error: '估值区间下沿无效' });
   }
   if (dayHigh !== undefined && dayLow !== undefined && dayHigh < dayLow) {
-    return res.status(400).json({ error: '当日最高价不能低于最低价' });
+    return res.status(400).json({ error: '估值区间上沿不能低于估值区间下沿' });
   }
   const o = Number(open), c = Number(close);
   if (dayHigh !== undefined && (o > dayHigh || c > dayHigh)) {
-    return res.status(400).json({ error: '开盘价/收盘价不能高于当日最高价' });
+    return res.status(400).json({ error: '期初估值/当前估值不能高于估值区间上沿' });
   }
   if (dayLow !== undefined && (o < dayLow || c < dayLow)) {
-    return res.status(400).json({ error: '开盘价/收盘价不能低于当日最低价' });
+    return res.status(400).json({ error: '期初估值/当前估值不能低于估值区间下沿' });
   }
 
   // 最高/最低价的出现时间（可选，"HH:MM"）。映射到 slots 下标；
@@ -303,13 +303,13 @@ router.post('/daily', requireAuth, requireAdmin, (req: Request, res: Response) =
   const highIdx = dayHigh !== undefined ? slotIdxOfTime(highTime) : undefined;
   const lowIdx = dayLow !== undefined ? slotIdxOfTime(lowTime) : undefined;
   if (highTime && dayHigh !== undefined && highIdx === undefined) {
-    return res.status(400).json({ error: '最高价出现时间不在交易时段内（9:00-12:00 / 13:00-16:10，5分钟为一格）' });
+    return res.status(400).json({ error: '估值区间上沿出现时间不在估值展示时段内（9:00-12:00 / 13:00-16:10，30分钟为一格）' });
   }
   if (lowTime && dayLow !== undefined && lowIdx === undefined) {
-    return res.status(400).json({ error: '最低价出现时间不在交易时段内（9:00-12:00 / 13:00-16:10，5分钟为一格）' });
+    return res.status(400).json({ error: '估值区间下沿出现时间不在估值展示时段内（9:00-12:00 / 13:00-16:10，30分钟为一格）' });
   }
   if (highIdx !== undefined && lowIdx !== undefined && highIdx === lowIdx) {
-    return res.status(400).json({ error: '最高价与最低价不能设在同一时间点' });
+    return res.status(400).json({ error: '估值区间上沿与估值区间下沿不能设在同一时间点' });
   }
 
   const insert = db.prepare(
@@ -339,7 +339,7 @@ router.post('/daily', requireAuth, requireAdmin, (req: Request, res: Response) =
       }
     });
     tx();
-    res.json({ message: `已生成 ${slots.length} 个价格计划点（${synced} 个已到点，立即生效）`, count: slots.length, synced });
+    res.json({ message: `已生成 ${slots.length} 个参考估值计划点（${synced} 个已到点，立即生效）`, count: slots.length, synced });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -352,7 +352,7 @@ router.post('/daily', requireAuth, requireAdmin, (req: Request, res: Response) =
 router.post('/batch', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const { from, to, open, close } = req.body;
   if (!from || !to || !open || !close) {
-    return res.status(400).json({ error: '日期范围、开盘价、收盘价必填' });
+    return res.status(400).json({ error: '日期范围、期初估值、当前估值必填' });
   }
 
   const start = new Date(from + 'T00:00:00');
@@ -384,7 +384,7 @@ router.post('/batch', requireAuth, requireAdmin, (req: Request, res: Response) =
       }
     });
     tx();
-    res.json({ message: `已生成 ${totalSlots} 个价格计划点`, count: totalSlots });
+    res.json({ message: `已生成 ${totalSlots} 个参考估值计划点`, count: totalSlots });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -442,7 +442,7 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
     const volDown = input.volDown !== undefined ? Number(input.volDown) : 1.0;
 
     if (!Number.isFinite(open) || open <= 0 || !Number.isFinite(close) || close <= 0) {
-      return res.status(400).json({ error: `${dateStr} 的开盘价/收盘价无效` });
+      return res.status(400).json({ error: `${dateStr} 的期初估值/当前估值无效` });
     }
     if (!Number.isFinite(volUp) || volUp < 0 || !Number.isFinite(volDown) || volDown < 0) {
       return res.status(400).json({ error: `${dateStr} 的波动参数无效` });
@@ -452,19 +452,19 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
     const high = input.high !== undefined && (input.high as any) !== '' ? Number(input.high) : undefined;
     const low = input.low !== undefined && (input.low as any) !== '' ? Number(input.low) : undefined;
     if (high !== undefined && (!Number.isFinite(high) || high <= 0)) {
-      return res.status(400).json({ error: `${dateStr} 的当日最高价无效` });
+      return res.status(400).json({ error: `${dateStr} 的估值区间上沿无效` });
     }
     if (low !== undefined && (!Number.isFinite(low) || low <= 0)) {
-      return res.status(400).json({ error: `${dateStr} 的当日最低价无效` });
+      return res.status(400).json({ error: `${dateStr} 的估值区间下沿无效` });
     }
     if (high !== undefined && low !== undefined && high < low) {
-      return res.status(400).json({ error: `${dateStr} 的当日最高价不能低于最低价` });
+      return res.status(400).json({ error: `${dateStr} 的估值区间上沿不能低于估值区间下沿` });
     }
     if (high !== undefined && (open > high || close > high)) {
-      return res.status(400).json({ error: `${dateStr} 的开盘价/收盘价不能高于当日最高价` });
+      return res.status(400).json({ error: `${dateStr} 的期初估值/当前估值不能高于估值区间上沿` });
     }
     if (low !== undefined && (open < low || close < low)) {
-      return res.status(400).json({ error: `${dateStr} 的开盘价/收盘价不能低于当日最低价` });
+      return res.status(400).json({ error: `${dateStr} 的期初估值/当前估值不能低于估值区间下沿` });
     }
 
     activeDays.push({ date: dateStr, open, close, volUp, volDown, high, low, highTime: input.highTime, lowTime: input.lowTime });
@@ -472,7 +472,7 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
   }
 
   if (activeDays.length === 0) {
-    return res.status(400).json({ error: '没有可重建的交易日' });
+    return res.status(400).json({ error: '没有可重建的估值日期' });
   }
 
   const planRows = activeDays.flatMap(day => buildSlotsForDay(
@@ -480,7 +480,7 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
     { high: day.high, low: day.low, highTime: day.highTime, lowTime: day.lowTime },
   ));
   if (planRows.length === 0) {
-    return res.status(400).json({ error: '未生成任何价格计划点' });
+    return res.status(400).json({ error: '未生成任何参考估值计划点' });
   }
 
   const uniquePlanRows = Array.from(
@@ -543,11 +543,11 @@ router.post('/rebuild-range', requireAuth, requireAdmin, (req: Request, res: Res
     tx();
 
     if (!applyToStockPrices) {
-      warnings.push('本次仅重建价格计划，未同步覆盖真实K线');
+      warnings.push('本次仅重建参考估值计划，未同步覆盖参考估值走势');
     }
 
     res.json({
-      message: `已重建 ${activeDays.length} 个交易日`,
+      message: `已重建 ${activeDays.length} 个估值日期`,
       summary: {
         tradingDays: activeDays.length,
         skippedDays: skippedDays.length,
@@ -601,10 +601,10 @@ function nowSlotStr(): string {
 router.post('/adjust-smooth', requireAuth, requireAdmin, (req: Request, res: Response) => {
   const { id, close, window } = req.body;
   const target = db.prepare('SELECT * FROM price_plan WHERE id = ?').get(id) as any;
-  if (!target) return res.status(404).json({ error: '该价格点不存在' });
+  if (!target) return res.status(404).json({ error: '该参考估值点不存在' });
 
   const newClose = Number(close);
-  if (!Number.isFinite(newClose) || newClose <= 0) return res.status(400).json({ error: '价格无效' });
+  if (!Number.isFinite(newClose) || newClose <= 0) return res.status(400).json({ error: '参考估值无效' });
 
   const W = Math.min(Math.max(Number(window) || 6, 0), 30);
   const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -661,9 +661,9 @@ router.post('/adjust-smooth', requireAuth, requireAdmin, (req: Request, res: Res
 
   try {
     logOperation(req.user!.id, req.user!.username, 'adjust_price_smooth',
-      `${target.time_slot} 改为 ${newClose}，平滑带动 ${changed} 个计划点，同步 ${stockSynced} 个K线点`);
+      `${target.time_slot} 当前估值改为 ${newClose}，平滑带动 ${changed} 个参考估值计划点，同步 ${stockSynced} 个参考估值走势点`);
   } catch { /* 写操作日志失败不应影响改价结果 */ }
-  res.json({ message: `已调整，平滑带动 ${changed} 个点（${stockSynced} 个已同步到K线）`, changed, stockSynced });
+  res.json({ message: `已调整，平滑带动 ${changed} 个参考估值点（${stockSynced} 个已同步到参考估值走势）`, changed, stockSynced });
 });
 
 

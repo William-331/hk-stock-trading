@@ -126,7 +126,7 @@ export default function UserManage() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">用户管理</h1>
-          <p className="text-xs text-gray-400 mt-0.5">查看与管理所有账户的密码、资金和持仓</p>
+          <p className="text-xs text-gray-400 mt-0.5">查看与管理所有账户的密码、资金和权证持有量</p>
         </div>
         <div className="flex gap-2">
           <button onClick={handleExport}
@@ -193,7 +193,7 @@ export default function UserManage() {
             <span>用户</span>
             <span>密码</span>
             <span>资金</span>
-            <span>持仓</span>
+            <span>权证持有量</span>
             <span className="text-right">操作</span>
           </div>
           <div className="divide-y divide-gray-50 max-h-[58vh] overflow-y-auto">
@@ -221,7 +221,7 @@ export default function UserManage() {
                 </div>
                 {/* 资金 */}
                 <div className="text-gray-700 font-medium">¥{(u.balance || 0).toLocaleString()}</div>
-                {/* 持仓 */}
+                {/* 权证持有量 */}
                 <div className="text-gray-500 text-xs">{u.position_qty || 0}股</div>
                 {/* 操作 */}
                 <div className="flex items-center justify-end gap-3">

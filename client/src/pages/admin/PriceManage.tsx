@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getKline, setDailyPlan, getPricePlan, adjustPriceSmooth, dailySummary, getLatestPrice, getStockInfo, rebuildPriceRange } from '../../api';
-import KlineChart from '../../components/KlineChart';
+import { getValuationRange, setDailyPlan, getPricePlan, adjustPriceSmooth, dailySummary, getLatestPrice, getStockInfo, rebuildPriceRange } from '../../api';
+import type { ValuationRangeResponse } from '../../api';
+import ValuationRangeChart from '../../components/ValuationRangeChart';
+import { ValuationNoticeBanner } from '../../components/compliance';
 
 // 本地日期格式化为 YYYY-MM-DD（不要用 toISOString，那是 UTC 会在东八区凌晨偏成前一天）
 function toLocalDate(d: Date): string {
@@ -45,13 +47,12 @@ interface RebuildSummary {
 type RebuildPhase = 'confirm' | 'submitting' | 'success' | 'error';
 
 export default function PriceManage() {
-  const [kline, setKline] = useState<any[]>([]);
+  const [valuationRange, setValuationRange] = useState<ValuationRangeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'daily' | 'batch'>('daily');
   const [msg, setMsg] = useState('');
   const [stockInfo, setStockInfo] = useState<any>({ code: '02110.HK', name: '天成控股' });
   const [latestPrice, setLatestPrice] = useState<any>(null);
-  const [planFuture, setPlanFuture] = useState<any[]>([]); // 未来待执行计划点（图上预览）
 
   // ---- 每日设定 ----
   const [dailyDate, setDailyDate] = useState(toLocalDate(new Date()));
@@ -85,36 +86,20 @@ export default function PriceManage() {
 
   useEffect(() => { loadData(); }, []);
 
-  // 当前时间格式化为 "YYYY-MM-DD HH:MM"（与 time_slot 一致），用于筛选未来计划点
-  const nowSlot = () => {
-    const n = new Date();
-    const pad = (x: number) => String(x).padStart(2, '0');
-    return `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())} ${pad(n.getHours())}:${pad(n.getMinutes())}`;
-  };
-
-  // 拉取「未来待执行」计划点，作为控价图上的预览虚线
-  const loadPlanFuture = () => {
-    getPricePlan({ from: nowSlot(), status: 'pending' })
-      .then(res => setPlanFuture(res.data || []))
-      .catch(() => setPlanFuture([]));
-  };
-
   const loadData = () => {
-    Promise.all([getKline(2000), getLatestPrice(), getStockInfo()])
-      .then(([kRes, pRes, sRes]) => {
-        setKline(kRes.data || []);
+    Promise.all([getValuationRange(), getLatestPrice(), getStockInfo()])
+      .then(([rangeRes, pRes, sRes]) => {
+        setValuationRange(rangeRes.data);
         setLatestPrice(pRes.data);
         if (sRes.data) setStockInfo(sRes.data);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-    loadPlanFuture();
   };
 
-  const loadKline = () => {
-    getKline(2000).then(res => setKline(res.data)).catch(console.error);
+  const refreshValuationRange = () => {
+    getValuationRange().then(res => setValuationRange(res.data)).catch(console.error);
     getLatestPrice().then(res => setLatestPrice(res.data)).catch(() => {});
-    loadPlanFuture();
   };
 
   const showMsg = (text: string) => {
@@ -132,15 +117,15 @@ export default function PriceManage() {
   const getTradingStatus = () => {
     const now = new Date();
     const day = now.getDay();
-    if (day === 0 || day === 6) return { label: '周末休市', color: 'bg-gray-100 text-gray-500' };
+    if (day === 0 || day === 6) return { label: '周末暂停展示', color: 'bg-gray-100 text-gray-500' };
     const h = now.getHours();
     const m = now.getMinutes();
     const t = h * 60 + m;
-    if (t < 9 * 60) return { label: '盘前', color: 'bg-gray-100 text-gray-500' };
-    if (t < 12 * 60) return { label: '交易中', color: 'bg-red-50 text-[#e15241]' };
-    if (t < 13 * 60) return { label: '午间休市', color: 'bg-gray-100 text-gray-500' };
-    if (t <= 16 * 60 + 10) return { label: '交易中', color: 'bg-red-50 text-[#e15241]' };
-    return { label: '已收盘', color: 'bg-gray-100 text-gray-500' };
+    if (t < 9 * 60) return { label: '展示前', color: 'bg-gray-100 text-gray-500' };
+    if (t < 12 * 60) return { label: '估值展示中', color: 'bg-red-50 text-[#e15241]' };
+    if (t < 13 * 60) return { label: '午间暂停展示', color: 'bg-gray-100 text-gray-500' };
+    if (t <= 16 * 60 + 10) return { label: '估值展示中', color: 'bg-red-50 text-[#e15241]' };
+    return { label: '已完成展示', color: 'bg-gray-100 text-gray-500' };
   };
   const tradingStatus = getTradingStatus();
   const rebuildSummary = useMemo<RebuildSummary>(() => {
@@ -159,13 +144,13 @@ export default function PriceManage() {
     // 若填了最高/最低价，做前端预校验，避免提交后才报错
     const highN = dailyHigh ? Number(dailyHigh) : undefined;
     const lowN = dailyLow ? Number(dailyLow) : undefined;
-    if (highN !== undefined && lowN !== undefined && highN < lowN) { showMsg('当日最高价不能低于最低价'); return; }
-    if (highN !== undefined && (Number(dailyOpen) > highN || Number(dailyClose) > highN)) { showMsg('开盘价/收盘价不能高于当日最高价'); return; }
-    if (lowN !== undefined && (Number(dailyOpen) < lowN || Number(dailyClose) < lowN)) { showMsg('开盘价/收盘价不能低于当日最低价'); return; }
+    if (highN !== undefined && lowN !== undefined && highN < lowN) { showMsg('估值区间上沿不能低于下沿'); return; }
+    if (highN !== undefined && (Number(dailyOpen) > highN || Number(dailyClose) > highN)) { showMsg('期初估值/当前估值不能高于估值区间上沿'); return; }
+    if (lowN !== undefined && (Number(dailyOpen) < lowN || Number(dailyClose) < lowN)) { showMsg('期初估值/当前估值不能低于估值区间下沿'); return; }
     // 出现时间只在填了对应价格时才发送；两者不能相同
     const highTime = highN !== undefined && dailyHighTime ? dailyHighTime : undefined;
     const lowTime = lowN !== undefined && dailyLowTime ? dailyLowTime : undefined;
-    if (highTime && lowTime && highTime === lowTime) { showMsg('最高价与最低价不能设在同一时间点'); return; }
+    if (highTime && lowTime && highTime === lowTime) { showMsg('估值区间上沿与下沿不能设在同一时间点'); return; }
     try {
       const res = await setDailyPlan({
         date: dailyDate, open: Number(dailyOpen), close: Number(dailyClose),
@@ -173,16 +158,16 @@ export default function PriceManage() {
         volUp: Number(dailyVolUp), volDown: Number(dailyVolDown),
       });
       showMsg((res.data as any).message);
-      loadKline();
+      refreshValuationRange();
     } catch (err: any) { showMsg(err.response?.data?.error || '设定失败'); }
   };
 
   // ========== 批量设定 ==========
   const handleGenerateList = () => {
-    if (!batchFrom || !batchTo) { showMsg('请选择日期范围'); return; }
+    if (!batchFrom || !batchTo) { showMsg('请选择估值日期范围'); return; }
     const start = new Date(batchFrom + 'T00:00:00');
     const end = new Date(batchTo + 'T00:00:00');
-    if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) { showMsg('日期范围无效'); return; }
+    if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) { showMsg('估值日期范围无效'); return; }
     const days: BatchDay[] = [];
     const cur = new Date(start);
     while (cur <= end) {
@@ -205,23 +190,23 @@ export default function PriceManage() {
 
   const handleBatchSave = async () => {
     if (rebuildPhase === 'submitting') {
-      showMsg('正在执行历史重建，请稍候');
+      showMsg('正在处理历史参考估值重建，请稍候');
       return;
     }
 
     if (!batchFrom || !batchTo || batchDays.length === 0) {
-      showMsg('请先生成历史重建日期列表');
+      showMsg('请先生成历史重建估值日期列表');
       return;
     }
 
     const invalidDay = batchDays.find(d => !d.isWeekend && (!d.open || !d.close));
     if (invalidDay) {
-      showMsg(`${invalidDay.date} 的开盘价和收盘价未填写`);
+      showMsg(`${invalidDay.date} 的期初估值和当前估值未填写`);
       return;
     }
 
     if (rebuildSummary.tradingDays === 0) {
-      showMsg('没有可重建的交易日');
+      showMsg('没有可重建的估值日期');
       return;
     }
 
@@ -270,11 +255,11 @@ export default function PriceManage() {
       setRebuildResult(summary || null);
       setRebuildWarnings(warnings);
       setRebuildPhase('success');
-      showMsg(`已重建 ${(summary?.tradingDays ?? 0)} 个交易日，计划 ${(summary?.planSlotsRebuilt ?? 0)} 条${applyToStockPrices ? `，K线 ${(summary?.stockSlotsRebuilt ?? 0)} 条` : ''}`);
+      showMsg(`已重建 ${(summary?.tradingDays ?? 0)} 个估值日期，参考估值计划 ${(summary?.planSlotsRebuilt ?? 0)} 条${applyToStockPrices ? `，已展示参考估值曲线 ${(summary?.stockSlotsRebuilt ?? 0)} 条` : ''}`);
       if (warnings.length) {
         setTimeout(() => showMsg(warnings[0]), 800);
       }
-      loadKline();
+      refreshValuationRange();
     } catch (err: any) {
       const errMsg = err.response?.data?.error || err.message || '历史重建失败';
       setRebuildError(errMsg);
@@ -320,12 +305,12 @@ export default function PriceManage() {
   const handleSlotSave = async (plan: any) => {
     try {
       const newClose = Number(editSlotPrice);
-      if (!Number.isFinite(newClose) || newClose <= 0) { showMsg('请输入有效价格'); return; }
+      if (!Number.isFinite(newClose) || newClose <= 0) { showMsg('请输入有效估值'); return; }
       await adjustPriceSmooth({ id: plan.id, close: newClose, window: smoothWindow });
       setEditSlotId(null);
       const res = await getPricePlan({ date: editDay! });
       setEditDayPlans(res.data);
-      loadKline();
+      refreshValuationRange();
       showMsg(`已调整 ${plan.time_slot.slice(11)}，前后 ${smoothWindow} 点平滑过渡`);
     } catch (err: any) { showMsg(err.response?.data?.error || '更新失败'); }
   };
@@ -334,15 +319,17 @@ export default function PriceManage() {
   if (editDay) {
     return (
       <div className="max-w-lg mx-auto px-4 py-4">
+        <ValuationNoticeBanner />
+
         <div className="flex items-center gap-2 mb-4">
           <button onClick={closeDayEdit} className="text-gray-400 hover:text-gray-600">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
           </button>
-          <h2 className="text-lg font-bold">{editDay} 分时波动</h2>
+          <h2 className="text-lg font-bold">{editDay} 参考估值分时波动</h2>
         </div>
         {msg && <div className="mb-3 px-3 py-2 bg-blue-100 text-blue-700 rounded-lg text-sm">{msg}</div>}
         <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
-          <span className="shrink-0">改价时平滑带动前后</span>
+          <span className="shrink-0">调整估值时平滑带动前后</span>
           <select value={smoothWindow} onChange={e => setSmoothWindow(Number(e.target.value))}
             className="px-2 py-1 border border-blue-200 rounded text-xs bg-white">
             <option value={0}>仅当前点</option>
@@ -354,7 +341,7 @@ export default function PriceManage() {
           <span className="shrink-0 text-blue-400">个点，自动顺势过渡</span>
         </div>
         {editDayPlans.length === 0 ? (
-          <div className="py-8 text-center text-xs text-gray-400">该日期暂无价格计划，请先在每日设定或历史重建中生成</div>
+          <div className="py-8 text-center text-xs text-gray-400">该估值日期暂无参考估值计划，请先在每日设定或历史重建中生成</div>
         ) : (
           <div className="space-y-1 max-h-[70vh] overflow-y-auto">
             {editDayPlans.map(p => (
@@ -372,7 +359,7 @@ export default function PriceManage() {
                   <>
                     <span className="flex-1 text-right font-medium tabular-nums">{p.close.toFixed(2)}</span>
                     <span className={`text-[10px] shrink-0 ${p.status === 'executed' ? 'text-green-500' : p.status === 'skipped' ? 'text-gray-400' : 'text-blue-500'}`}>
-                      {p.status === 'executed' ? '已执行' : p.status === 'skipped' ? '已跳过' : '待执行'}
+                      {p.status === 'executed' ? '已展示' : p.status === 'skipped' ? '已跳过' : '待展示'}
                     </span>
                     <button onClick={() => handleSlotEdit(p)} className="text-xs text-blue-500 shrink-0">改</button>
                   </>
@@ -391,6 +378,8 @@ export default function PriceManage() {
 
   return (
     <div className="max-w-lg mx-auto px-4 py-4">
+      <ValuationNoticeBanner />
+
       {/* ---- 股票信息头 ---- */}
       <div className="flex items-center justify-between mb-3">
         <div>
@@ -419,15 +408,16 @@ export default function PriceManage() {
 
       {msg && <div className="mb-3 px-3 py-2 bg-blue-100 text-blue-700 rounded-lg text-sm">{msg}</div>}
 
-      {/* ---- 走势图（整宽）---- */}
+      {/* ---- 估值区间图（整宽）---- */}
       <div className="mb-4">
-        <KlineChart data={kline} planData={planFuture} />
+        <ValuationRangeChart data={valuationRange} loading={loading} />
+        <p className="mt-2 px-1 text-xs text-gray-500">待执行计划仅在生效后进入估值区间。</p>
       </div>
 
       {/* Tab */}
       <div className="flex border-b mb-4">
         {[
-          { k: 'daily' as const, label: '每日设定' },
+          { k: 'daily' as const, label: '参考估值管理' },
           { k: 'batch' as const, label: '历史重建' },
         ].map(t => (
           <button key={t.k} onClick={() => setTab(t.k)}
@@ -444,19 +434,19 @@ export default function PriceManage() {
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-gray-500">开盘价</label>
+              <label className="text-xs text-gray-500">期初估值</label>
               <input type="number" step="0.01" value={dailyOpen} onChange={e => setDailyOpen(e.target.value)}
                 placeholder="如 12.50" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
             <div>
-              <label className="text-xs text-gray-500">收盘价</label>
+              <label className="text-xs text-gray-500">当前估值</label>
               <input type="number" step="0.01" value={dailyClose} onChange={e => setDailyClose(e.target.value)}
                 placeholder="如 13.00" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-gray-500">当日最高价</label>
+              <label className="text-xs text-gray-500">估值区间上沿</label>
               <input type="number" step="0.01" value={dailyHigh} onChange={e => setDailyHigh(e.target.value)}
                 placeholder="选填，如 13.20" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               <select value={dailyHighTime} onChange={e => setDailyHighTime(e.target.value)} disabled={!dailyHigh}
@@ -466,7 +456,7 @@ export default function PriceManage() {
               </select>
             </div>
             <div>
-              <label className="text-xs text-gray-500">当日最低价</label>
+              <label className="text-xs text-gray-500">估值区间下沿</label>
               <input type="number" step="0.01" value={dailyLow} onChange={e => setDailyLow(e.target.value)}
                 placeholder="选填，如 12.30" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               <select value={dailyLowTime} onChange={e => setDailyLowTime(e.target.value)} disabled={!dailyLow}
@@ -489,10 +479,10 @@ export default function PriceManage() {
             </div>
           </div>
           <button onClick={handleDaily} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-            生成当日价格计划
+            生成当日参考估值计划
           </button>
           <button onClick={() => openDayEdit(dailyDate)} className="w-full py-2 bg-white border border-blue-300 text-blue-600 rounded-lg text-sm font-medium hover:bg-blue-50">
-            编辑该日分时走势（逐点改价）
+            编辑该日参考估值走势（逐点调整）
           </button>
         </div>
       )}
@@ -502,12 +492,12 @@ export default function PriceManage() {
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-gray-500">起始日期</label>
+              <label className="text-xs text-gray-500">起始估值日期</label>
               <input type="date" value={batchFrom} onChange={e => setBatchFrom(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
             <div>
-              <label className="text-xs text-gray-500">结束日期</label>
+              <label className="text-xs text-gray-500">结束估值日期</label>
               <input type="date" value={batchTo} onChange={e => setBatchTo(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
@@ -516,7 +506,7 @@ export default function PriceManage() {
           <textarea
             value={rebuildReason}
             onChange={e => setRebuildReason(e.target.value)}
-            placeholder="填写本次历史重建原因（建议记录用途/日期段）"
+            placeholder="填写本次历史重建原因（建议记录用途/估值日期段）"
             rows={2}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
@@ -527,26 +517,26 @@ export default function PriceManage() {
               checked={applyToStockPrices}
               onChange={e => setApplyToStockPrices(e.target.checked)}
             />
-            <span>同步覆盖真实K线（危险操作）</span>
+            <span>同步覆盖已展示参考估值曲线（危险操作）</span>
           </label>
 
           <button onClick={handleGenerateList} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-            生成日期列表
+            生成估值日期列表
           </button>
 
           {batchDays.length > 0 && (
             <>
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                将按区间重建历史价格计划{applyToStockPrices ? '并同步覆盖真实K线' : ''}。周末自动跳过，保存前可继续进入“当日波动”做细调。
+                将按区间重建历史参考估值计划{applyToStockPrices ? '并同步覆盖已展示参考估值曲线' : ''}。周末自动跳过，保存前可继续进入“当日参考估值波动”做细调。
               </div>
               <div className="flex items-center justify-between rounded-lg bg-gray-100 px-3 py-2 text-xs text-gray-600">
-                <span>预计重建 {rebuildSummary.tradingDays} 个交易日 / {rebuildSummary.planSlotsRebuilt} 个计划点</span>
-                <span>{applyToStockPrices ? `同步覆盖 ${rebuildSummary.stockSlotsRebuilt} 个K线点` : '仅重建计划层'}</span>
+                <span>预计重建 {rebuildSummary.tradingDays} 个估值日期 / {rebuildSummary.planSlotsRebuilt} 个参考估值点</span>
+                <span>{applyToStockPrices ? `同步覆盖 ${rebuildSummary.stockSlotsRebuilt} 个已展示参考估值点` : '仅重建参考估值计划层'}</span>
               </div>
               <div className="flex items-center gap-2 px-2 py-1.5 bg-gray-100 rounded text-xs font-medium text-gray-500">
-                <span className="w-24">日期</span>
-                <span className="flex-1">开盘价</span>
-                <span className="flex-1">收盘价</span>
+                <span className="w-24">估值日期</span>
+                <span className="flex-1">期初估值</span>
+                <span className="flex-1">当前估值</span>
                 <span className="w-12">上限%</span>
                 <span className="w-12">下限%</span>
                 <span className="w-16"></span>
@@ -570,10 +560,10 @@ export default function PriceManage() {
                         <>
                           <input type="number" step="0.01" value={d.open}
                             onChange={e => { const cp = [...batchDays]; cp[i].open = e.target.value; setBatchDays(cp); }}
-                            placeholder="开" className="flex-1 w-0 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            placeholder="期初" className="flex-1 w-0 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
                           <input type="number" step="0.01" value={d.close}
                             onChange={e => { const cp = [...batchDays]; cp[i].close = e.target.value; setBatchDays(cp); }}
-                            placeholder="收" className="flex-1 w-0 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            placeholder="当前" className="flex-1 w-0 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
                           <input type="number" step="0.1" value={d.volUp}
                             onChange={e => { const cp = [...batchDays]; cp[i].volUp = e.target.value; setBatchDays(cp); }}
                             className="w-12 px-1 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
@@ -584,7 +574,7 @@ export default function PriceManage() {
                       )}
                       <button onClick={() => openDayEdit(d.date)}
                         className="w-16 py-1.5 text-[10px] text-blue-500 border border-blue-200 rounded hover:bg-blue-50 shrink-0">
-                        当日波动
+                        当日参考估值波动
                       </button>
                     </div>
                     {/* 第二行：当日最高/最低价 + 出现时间（选填） */}
@@ -593,7 +583,7 @@ export default function PriceManage() {
                         <div className="flex-1 flex items-center gap-1">
                           <input type="number" step="0.01" value={d.high}
                             onChange={e => { const cp = [...batchDays]; cp[i].high = e.target.value; setBatchDays(cp); }}
-                            placeholder="最高(选填)" className="w-0 flex-1 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            placeholder="上沿(选填)" className="w-0 flex-1 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
                           <select value={d.highTime} disabled={!d.high}
                             onChange={e => { const cp = [...batchDays]; cp[i].highTime = e.target.value; setBatchDays(cp); }}
                             className="w-20 px-1 py-1.5 border border-gray-200 rounded text-[10px] bg-white disabled:bg-gray-100 disabled:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400">
@@ -604,7 +594,7 @@ export default function PriceManage() {
                         <div className="flex-1 flex items-center gap-1">
                           <input type="number" step="0.01" value={d.low}
                             onChange={e => { const cp = [...batchDays]; cp[i].low = e.target.value; setBatchDays(cp); }}
-                            placeholder="最低(选填)" className="w-0 flex-1 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            placeholder="下沿(选填)" className="w-0 flex-1 px-2 py-1.5 border border-gray-200 rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
                           <select value={d.lowTime} disabled={!d.low}
                             onChange={e => { const cp = [...batchDays]; cp[i].lowTime = e.target.value; setBatchDays(cp); }}
                             className="w-20 px-1 py-1.5 border border-gray-200 rounded text-[10px] bg-white disabled:bg-gray-100 disabled:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400">
@@ -635,12 +625,12 @@ export default function PriceManage() {
             {(rebuildPhase === 'confirm' || rebuildPhase === 'submitting') && (
               <>
                 <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-                  该操作将覆盖 {batchFrom} 至 {batchTo} 区间内的历史价格计划{applyToStockPrices ? '与真实K线' : ''}，无法自动撤销。
+                  该操作将覆盖 {batchFrom} 至 {batchTo} 区间内的历史参考估值计划{applyToStockPrices ? '与已展示参考估值曲线' : ''}，无法自动撤销。
                 </div>
                 <div className="text-sm text-gray-600 space-y-1">
-                  <div>交易日：{rebuildSummary.tradingDays} 天</div>
-                  <div>计划点：{rebuildSummary.planSlotsRebuilt} 条</div>
-                  <div>K线点：{applyToStockPrices ? `${rebuildSummary.stockSlotsRebuilt} 条` : '本次不覆盖真实K线'}</div>
+                  <div>估值日期：{rebuildSummary.tradingDays} 天</div>
+                  <div>参考估值点：{rebuildSummary.planSlotsRebuilt} 条</div>
+                  <div>已展示参考估值点：{applyToStockPrices ? `${rebuildSummary.stockSlotsRebuilt} 条` : '本次不覆盖已展示参考估值曲线'}</div>
                   <div>备注：{rebuildReason.trim() || '未填写'}</div>
                 </div>
               </>
@@ -648,8 +638,8 @@ export default function PriceManage() {
 
             {rebuildPhase === 'submitting' && (
               <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-3 text-sm text-blue-700">
-                <div className="font-medium">历史重建执行中...</div>
-                <div className="mt-1 text-xs text-blue-600">正在提交区间计划并刷新最新行情，请勿关闭当前弹窗。</div>
+                <div className="font-medium">历史参考估值重建中...</div>
+                <div className="mt-1 text-xs text-blue-600">正在提交区间参考估值计划并刷新已展示参考估值曲线，请勿关闭当前弹窗。</div>
               </div>
             )}
 
@@ -664,10 +654,10 @@ export default function PriceManage() {
               <div className="space-y-3">
                 <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-3 text-sm text-green-700 space-y-1">
                   <div className="font-medium">历史重建已完成并刷新图表数据</div>
-                  <div>交易日：{rebuildResult.tradingDays} 天</div>
-                  <div>计划点：{rebuildResult.planSlotsRebuilt} 条</div>
-                  <div>K线点：{applyToStockPrices ? `${rebuildResult.stockSlotsRebuilt} 条` : '本次未覆盖真实K线'}</div>
-                  <div>跳过日期：{rebuildResult.skippedDays} 天</div>
+                  <div>估值日期：{rebuildResult.tradingDays} 天</div>
+                  <div>参考估值点：{rebuildResult.planSlotsRebuilt} 条</div>
+                  <div>已展示参考估值点：{applyToStockPrices ? `${rebuildResult.stockSlotsRebuilt} 条` : '本次未覆盖已展示参考估值曲线'}</div>
+                  <div>跳过估值日期：{rebuildResult.skippedDays} 天</div>
                 </div>
                 {rebuildWarnings.length > 0 && (
                   <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 space-y-1">
@@ -686,7 +676,7 @@ export default function PriceManage() {
                   onClick={handleConfirmRebuild}
                   className="flex-1 py-2 bg-red-500 text-white rounded-lg text-sm font-medium hover:bg-red-600"
                 >
-                  确认执行
+                  确认重建
                 </button>
                 <button
                   type="button"

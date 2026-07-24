@@ -13,6 +13,10 @@ import TradeRecords from './pages/admin/TradeRecords';
 import AdminDashboard from './pages/admin/Dashboard';
 import UserManage from './pages/admin/UserManage';
 import Navbar from './components/Navbar';
+import LegalDisclaimer from './components/LegalDisclaimer';
+import { ComplianceAcknowledgementModal } from './components/compliance';
+import { LEGAL_NOTICE_VERSION } from './compliance/notices';
+import { acknowledgeCompliance, getComplianceStatus } from './api';
 
 function ProtectedRoute({ children, adminOnly }: { children: JSX.Element; adminOnly?: boolean }) {
   const user = JSON.parse(localStorage.getItem('user') || 'null');
@@ -22,10 +26,52 @@ function ProtectedRoute({ children, adminOnly }: { children: JSX.Element; adminO
 }
 
 function Layout({ children }: { children: React.ReactNode }) {
+  const [acknowledged, setAcknowledged] = useState<boolean | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    getComplianceStatus(LEGAL_NOTICE_VERSION)
+      .then(res => {
+        if (!cancelled) setAcknowledged(!!res.data.acknowledged);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAcknowledged(false);
+          setError('合规声明状态加载失败，请点击“已知晓”重试');
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleAcknowledge = async () => {
+    setSubmitting(true);
+    setError('');
+    try {
+      await acknowledgeCompliance(LEGAL_NOTICE_VERSION);
+      setAcknowledged(true);
+    } catch (e: any) {
+      setError(e?.response?.data?.error || '确认失败，请检查网络后重试');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const complianceReady = acknowledged === true;
+
   return (
-    <div className="min-h-screen pb-16">
-      {children}
-      <Navbar />
+    <div className="flex min-h-screen flex-col pb-16">
+      {acknowledged !== true && (
+        <ComplianceAcknowledgementModal
+          submitting={submitting || acknowledged === null}
+          error={error}
+          onAcknowledge={handleAcknowledge}
+        />
+      )}
+      <main className="flex-1">{children}</main>
+      <LegalDisclaimer />
+      <Navbar complianceReady={complianceReady} />
     </div>
   );
 }

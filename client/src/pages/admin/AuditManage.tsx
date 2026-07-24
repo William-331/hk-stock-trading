@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getPendingOrders, approveOrder, rejectOrder } from '../../api';
+import { ValuationNoticeBanner } from '../../components/compliance';
 
 export default function AuditManage() {
   const [orders, setOrders] = useState<any[]>([]);
@@ -44,6 +45,8 @@ export default function AuditManage() {
 
   return (
     <div className="max-w-lg mx-auto px-4 py-4">
+      <ValuationNoticeBanner />
+
       <h1 className="text-xl font-bold mb-4">待审核申请</h1>
 
       {msg && (
@@ -64,7 +67,7 @@ export default function AuditManage() {
               <div className="flex justify-between items-start">
                 <div>
                   <span className={`font-bold ${order.type === 'buy' ? 'text-red-600' : 'text-green-600'}`}>
-                    {order.type === 'buy' ? '买入' : '卖出'}
+                    {order.type === 'buy' ? '认购' : '申请转让'}
                   </span>
                   <span className="text-gray-500 text-sm ml-2">{order.username}({order.real_name})</span>
                 </div>

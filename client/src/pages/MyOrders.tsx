@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getMyOrders, cancelOrder } from '../api';
+import { ValuationNoticeBanner } from '../components/compliance';
 
 const statusMap: Record<string, { label: string; cls: string }> = {
   pending: { label: '待审核', cls: 'bg-amber-50 text-amber-600 border-amber-200' },
@@ -33,7 +34,7 @@ export default function MyOrders() {
       await cancelOrder(id);
       load();
     } catch (e: any) {
-      window.alert(e?.response?.data?.error || '撤销失败，请重试');
+      window.alert(e?.response?.data?.error || '撤销申请失败，请重试');
     } finally {
       setCancelingId(null);
     }
@@ -41,16 +42,18 @@ export default function MyOrders() {
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] pb-20">
+      <ValuationNoticeBanner />
+
       <div className="max-w-lg mx-auto px-4 py-4">
-        <h1 className="text-lg font-bold text-gray-800 mb-4">我的申请</h1>
+        <h1 className="text-lg font-bold text-gray-800 mb-4">认购与转让记录</h1>
 
         {loading ? (
           <p className="text-gray-400 text-sm text-center py-8">加载中...</p>
         ) : orders.length === 0 ? (
           <div className="text-center py-16 text-gray-400">
             <p className="text-5xl mb-3">📭</p>
-            <p className="text-sm">暂无申请记录</p>
-            <p className="text-xs mt-1">在行情页点击买入或卖出提交申请</p>
+            <p className="text-sm">暂无认购与转让记录</p>
+            <p className="text-xs mt-1">在权证参考估值展示页点击认购或申请转让</p>
           </div>
         ) : (
           <div className="space-y-3">
@@ -62,14 +65,14 @@ export default function MyOrders() {
                       {statusMap[order.status]?.label || order.status}
                     </span>
                     <span className={`text-sm font-bold ${order.type === 'buy' ? 'text-[#e15241]' : 'text-[#47b262]'}`}>
-                      {order.type === 'buy' ? '买入' : '卖出'}
+                      {order.type === 'buy' ? '认购' : '申请转让'}
                     </span>
                   </div>
                   <span className="text-xs text-gray-400">{order.created_at}</span>
                 </div>
                 <div className="mt-3 flex justify-between text-sm">
-                  <span className="text-gray-600">{order.quantity} 股</span>
-                  <span className="text-gray-600">@ ¥{order.price?.toFixed(2)}</span>
+                  <span className="text-gray-600">{order.quantity} 份</span>
+                  <span className="text-gray-600">参考估值 ¥{order.price?.toFixed(2)}</span>
                   <span className="font-semibold text-gray-800">
                     ¥{((order.quantity || 0) * (order.price || 0)).toFixed(2)}
                   </span>
@@ -86,7 +89,7 @@ export default function MyOrders() {
                       disabled={cancelingId === order.id}
                       className="px-3 py-1.5 text-xs text-red-500 border border-red-200 rounded-lg hover:bg-red-50 active:scale-95 transition disabled:opacity-40"
                     >
-                      {cancelingId === order.id ? '撤销中...' : '撤销申请'}
+                      {cancelingId === order.id ? '撤销申请中...' : '撤销申请'}
                     </button>
                   </div>
                 )}

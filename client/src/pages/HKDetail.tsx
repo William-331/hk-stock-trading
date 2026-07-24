@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getHKQuote, getHKIntraday, getHKNews } from '../api';
 import HKChart from '../components/HKChart';
+import { ValuationNoticeBanner } from '../components/compliance';
 
 interface QuoteData {
   code: string;
@@ -85,7 +86,7 @@ export default function HKDetail() {
     const fetchQuote = (initial = false) => {
       getHKQuote(code)
         .then(res => { if (!cancelled) { setQuote(res.data); setError(''); } })
-        .catch(() => { if (!cancelled) setError('行情加载失败'); })
+        .catch(() => { if (!cancelled) setError('权证信息加载失败'); })
         .finally(() => { if (!cancelled && initial) setLoading(false); });
     };
 
@@ -142,11 +143,11 @@ export default function HKDetail() {
   const dataItems = [
     { label: '今开', value: fmt(quote.open) },
     { label: '昨收', value: fmt(quote.prevClose) },
-    { label: '最高', value: fmt(quote.high), cls: chgCls(quote.high - quote.prevClose) },
-    { label: '最低', value: fmt(quote.low), cls: chgCls(quote.low - quote.prevClose) },
-    { label: '成交量', value: fmtBigNum(quote.volume) },
-    { label: '成交额', value: fmtBigNum(quote.amount) },
-    { label: '涨跌幅', value: (quote.changePct >= 0 ? '+' : '') + fmt(quote.changePct) + '%', cls: priceCls },
+    { label: '估值区间上沿', value: fmt(quote.high), cls: chgCls(quote.high - quote.prevClose) },
+    { label: '估值区间下沿', value: fmt(quote.low), cls: chgCls(quote.low - quote.prevClose) },
+    { label: '转让完成数', value: fmtBigNum(quote.volume) },
+    { label: '转让参考金额', value: fmtBigNum(quote.amount) },
+    { label: '估值变动', value: (quote.changePct >= 0 ? '+' : '') + fmt(quote.changePct) + '%', cls: priceCls },
     { label: '换手率', value: quote.turnover > 0 ? fmt(quote.turnover) + '%' : '-' },
     { label: '振幅', value: quote.amplitude > 0 ? fmt(quote.amplitude) + '%' : '-' },
     { label: '量比', value: quote.volRatio > 0 ? fmt(quote.volRatio) : '-' },
@@ -159,6 +160,8 @@ export default function HKDetail() {
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] pb-20">
+      <ValuationNoticeBanner />
+
       {/* ---- Header ---- */}
       <div className="bg-white border-b border-gray-100 sticky top-0 z-20">
         <div className="flex items-center px-3 py-3 gap-3">
@@ -193,11 +196,11 @@ export default function HKDetail() {
       {/* ---- Bid / Ask (single level) ---- */}
       <div className="mx-2 mt-2 grid grid-cols-2 gap-2">
         <div className="bg-white rounded-lg shadow-sm p-3">
-          <p className="text-[10px] text-gray-400 mb-1">买一</p>
+          <p className="text-[10px] text-gray-400 mb-1">认购参考价</p>
           <p className="text-sm font-bold text-[#e15241] tabular-nums">{fmt(quote.bid)}</p>
         </div>
         <div className="bg-white rounded-lg shadow-sm p-3">
-          <p className="text-[10px] text-gray-400 mb-1">卖一</p>
+          <p className="text-[10px] text-gray-400 mb-1">转让参考价</p>
           <p className="text-sm font-bold text-[#47b262] tabular-nums">{fmt(quote.ask)}</p>
         </div>
       </div>
@@ -224,7 +227,7 @@ export default function HKDetail() {
               activeTab === 'trades' ? 'text-red-500 border-b-2 border-red-500' : 'text-gray-400'
             }`}
           >
-            成交明细
+            转让记录
           </button>
         </div>
 
@@ -253,15 +256,15 @@ export default function HKDetail() {
         ) : (
           <div className="max-h-80 overflow-y-auto">
             {trades.length === 0 ? (
-              <div className="py-8 text-center text-xs text-gray-400">暂无成交数据</div>
+              <div className="py-8 text-center text-xs text-gray-400">暂无转让记录</div>
             ) : (
               <div className="text-[11px]">
                 {/* Header */}
                 <div className="flex px-3 py-1.5 bg-gray-50 text-gray-400 font-medium">
                   <span className="w-16">时间</span>
-                  <span className="flex-1 text-right">价格</span>
-                  <span className="flex-1 text-right">数量</span>
-                  <span className="flex-1 text-right">金额</span>
+                  <span className="flex-1 text-right">参考估值</span>
+                  <span className="flex-1 text-right">转让完成数</span>
+                  <span className="flex-1 text-right">转让参考金额</span>
                 </div>
                 {trades.map((t, i) => (
                   <div key={i} className="flex px-3 py-1.5 border-b border-gray-50 tabular-nums">

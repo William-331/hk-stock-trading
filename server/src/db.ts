@@ -106,6 +106,14 @@ export function initDB() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS compliance_acknowledgements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      notice_version TEXT NOT NULL,
+      acknowledged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, notice_version)
+    );
+
     CREATE TABLE IF NOT EXISTS price_plan (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       time_slot TEXT NOT NULL UNIQUE,
@@ -130,12 +138,12 @@ export function initDB() {
   // 初始化默认设置
   const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   insertSetting.run('stock_code', '02110');
-  insertSetting.run('stock_name', '02110');
+  insertSetting.run('stock_name', '天成控股');
   insertSetting.run('backup_time', '23:00');
   insertSetting.run('backup_enabled', 'true');
 
-  // 如果已有旧数据"模拟标的"，更新为 02110
-  db.prepare("UPDATE settings SET value = '02110' WHERE key = 'stock_name' AND value = '模拟标的'").run();
+  // 仅将历史已知默认名称迁移为当前法定名称，保留管理员自定义名称
+  db.prepare("UPDATE settings SET value = '天成控股' WHERE key = 'stock_name' AND value IN ('正闻投资', '正闻', '02110', '模拟标的')").run();
 }
 
 export function seedData() {

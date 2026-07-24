@@ -34,6 +34,35 @@ export const register = (username: string, password: string, real_name: string) 
 export const changePassword = (oldPassword: string, newPassword: string) =>
   api.post('/auth/change-password', { oldPassword, newPassword });
 
+export const getComplianceStatus = (version: string) =>
+  api.get('/auth/compliance-status', { params: { version } });
+
+export const acknowledgeCompliance = (version: string) =>
+  api.post('/auth/compliance-acknowledge', { version });
+
+// Reference valuation range
+export interface ValuationRangePoint {
+  date: string;
+  neutral: number;
+  upper: number;
+  lower: number;
+}
+
+export interface ValuationRangeResponse {
+  window: {
+    timeZone: string;
+    naturalDays: number;
+    startDate: string | null;
+    endDate: string | null;
+  };
+  sigma: number;
+  method: string;
+  sampleCount: number;
+  points: ValuationRangePoint[];
+}
+
+export const getValuationRange = () => api.get<ValuationRangeResponse>('/stocks/valuation-range');
+
 // Stock / K-line
 export const getKline = (limit = 1000) => api.get('/stocks/kline', { params: { limit } });
 export const getLatestPrice = () => api.get('/stocks/latest');

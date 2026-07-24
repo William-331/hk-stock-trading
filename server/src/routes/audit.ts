@@ -54,7 +54,7 @@ router.post('/:id/approve', requireAuth, (req: Request, res: Response) => {
       const newBalance = user.balance - amount;
       db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(newBalance, order.user_id);
 
-      // 更新持仓
+      // 更新权证持有量
       const pos = db.prepare('SELECT * FROM positions WHERE user_id = ?').get(order.user_id) as any;
       if (pos && pos.quantity > 0) {
         const totalCost = pos.avg_cost * pos.quantity + amount;
@@ -67,18 +67,18 @@ router.post('/:id/approve', requireAuth, (req: Request, res: Response) => {
           .run(order.user_id, order.quantity, order.price);
       }
     } else {
-      // 卖出：加余额
+      // 申请转让：加余额
       const newBalance = user.balance + amount;
       db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(newBalance, order.user_id);
 
-      // 减持仓
+      // 减少权证持有量
       const pos = db.prepare('SELECT * FROM positions WHERE user_id = ?').get(order.user_id) as any;
       const newQty = pos.quantity - order.quantity;
       db.prepare('UPDATE positions SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?')
         .run(newQty, order.user_id);
     }
 
-    // 生成成交记录
+    // 生成认购与转让记录
     db.prepare(
       'INSERT INTO trade_records (user_id, order_id, type, quantity, price, amount) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(order.user_id, orderId, order.type, order.quantity, order.price, amount);
@@ -86,10 +86,11 @@ router.post('/:id/approve', requireAuth, (req: Request, res: Response) => {
 
   tx();
 
+  const typeLabel = order.type === 'buy' ? '认购' : '申请转让';
   logOperation(req.user!.id, req.user!.username, 'approve_order',
-    `审批通过 #${orderId}: user=${order.user_id} ${order.type} ${order.quantity}股 @${order.price}`);
+    `审批通过 #${orderId}: 用户=${order.user_id} ${typeLabel} ${order.quantity}股，参考估值 ${order.price}`);
 
-  res.json({ message: '已通过，成交记录已生成' });
+  res.json({ message: '已通过，认购与转让记录已生成' });
 });
 
 // 驳回申请

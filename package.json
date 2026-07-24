@@ -1,7 +1,7 @@
 {
   "name": "stock-trading",
   "version": "1.0.0",
-  "description": "港股模拟交易系统 — 支持实时行情、模拟下单、审核、K线、交易记录备份",
+  "description": "天成控股 02110.HK 权证信息查阅与意向管理平台",
   "scripts": {
     "install:all": "cd server && npm install && cd ../client && npm install",
     "dev:server": "cd server && npm run dev",

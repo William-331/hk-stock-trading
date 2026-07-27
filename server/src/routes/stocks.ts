@@ -24,7 +24,7 @@ function nowSlot(): string {
 }
 
 const VALUATION_TIME_ZONE = 'Asia/Shanghai';
-const VALUATION_WINDOW_DAYS = 30;
+const VALUATION_WINDOW_TRADING_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function shanghaiNowSlot(): string {
@@ -67,10 +67,6 @@ function parseValidSlot(slot: unknown): { date: string; dayNumber: number } | nu
   return { date: `${yearText}-${monthText}-${dayText}`, dayNumber: Date.UTC(year, month - 1, day) / DAY_MS };
 }
 
-function dateFromDayNumber(dayNumber: number): string {
-  return new Date(dayNumber * DAY_MS).toISOString().slice(0, 10);
-}
-
 function reasonablePrecision(value: number): number {
   return Math.round(value * 1e10) / 1e10;
 }
@@ -85,7 +81,7 @@ router.get('/kline', (req: Request, res: Response) => {
   res.json(prices);
 });
 
-// 最近 30 个自然日的每日估值及基于缺口归一化对数收益波动率的上下沿
+// 最近 30 个有效估值交易日的每日估值及相邻交易日对数收益波动率上下沿
 router.get('/valuation-range', (_req: Request, res: Response) => {
   const now = shanghaiNowSlot();
   const rows = db.prepare(
@@ -101,25 +97,16 @@ router.get('/valuation-range', (_req: Request, res: Response) => {
     const neutral = Number(row.close);
     if (!parsed || !Number.isFinite(neutral) || neutral <= 0 || latestByDate.has(parsed.date)) continue;
     latestByDate.set(parsed.date, { ...parsed, neutral });
+    if (latestByDate.size >= VALUATION_WINDOW_TRADING_DAYS) break;
   }
 
-  const latestEligibleDay = latestByDate.size
-    ? Math.max(...Array.from(latestByDate.values(), point => point.dayNumber))
-    : null;
-  const windowStartDay = latestEligibleDay === null ? null : latestEligibleDay - (VALUATION_WINDOW_DAYS - 1);
-  const dailyPoints = latestEligibleDay === null
-    ? []
-    : Array.from(latestByDate.values())
-        .filter(point => point.dayNumber >= windowStartDay! && point.dayNumber <= latestEligibleDay)
-        .sort((a, b) => a.dayNumber - b.dayNumber);
+  const dailyPoints = Array.from(latestByDate.values()).sort((a, b) => a.dayNumber - b.dayNumber);
 
   const returns: number[] = [];
   for (let i = 1; i < dailyPoints.length; i++) {
     const previous = dailyPoints[i - 1];
     const current = dailyPoints[i];
-    const calendarDayGap = current.dayNumber - previous.dayNumber;
-    if (calendarDayGap <= 0) continue;
-    const value = Math.log(current.neutral / previous.neutral) / Math.sqrt(calendarDayGap);
+    const value = Math.log(current.neutral / previous.neutral);
     if (Number.isFinite(value)) returns.push(value);
   }
 
@@ -135,12 +122,13 @@ router.get('/valuation-range', (_req: Request, res: Response) => {
   res.json({
     window: {
       timeZone: VALUATION_TIME_ZONE,
-      naturalDays: VALUATION_WINDOW_DAYS,
-      startDate: windowStartDay === null ? null : dateFromDayNumber(windowStartDay),
-      endDate: latestEligibleDay === null ? null : dateFromDayNumber(latestEligibleDay),
+      tradingDays: VALUATION_WINDOW_TRADING_DAYS,
+      returnedTradingDays: dailyPoints.length,
+      startDate: dailyPoints[0]?.date ?? null,
+      endDate: dailyPoints[dailyPoints.length - 1]?.date ?? null,
     },
     sigma,
-    method: 'population_stddev_gap_normalized_consecutive_log_returns',
+    method: 'population_stddev_consecutive_trading_day_log_returns',
     sampleCount: returns.length,
     points: dailyPoints.map(point => ({
       date: point.date,
@@ -154,12 +142,22 @@ router.get('/valuation-range', (_req: Request, res: Response) => {
 // 获取最新价格
 router.get('/latest', (_req: Request, res: Response) => {
   const now = nowSlot();
+  const completedTransferQuantity = Number((db.prepare(
+    "SELECT COALESCE(SUM(quantity), 0) AS quantity FROM trade_records WHERE type = 'sell'"
+  ).get() as { quantity: number }).quantity) || 0;
   const latest = db.prepare(
     `SELECT open, high, low, close, volume, time_slot FROM stock_prices WHERE ${VALID_SLOT_SQL} ORDER BY time_slot DESC, id DESC LIMIT 1`
   ).get(SLOT_GLOB, now) as any;
 
   if (!latest) {
-    return res.json({ open: 10.0, high: 10.0, low: 10.0, close: 10.0, volume: 0 });
+    return res.json({
+      open: 10.0,
+      high: 10.0,
+      low: 10.0,
+      close: 10.0,
+      volume: 0,
+      completedTransferQuantity,
+    });
   }
 
   // 涨跌幅（与上一根比较）
@@ -190,6 +188,7 @@ router.get('/latest', (_req: Request, res: Response) => {
     bid,
     ask,
     prevClose: prev?.close || latest.open,
+    completedTransferQuantity,
     buyLevels,
     sellLevels,
   });

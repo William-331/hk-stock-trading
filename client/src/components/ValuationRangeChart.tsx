@@ -26,8 +26,16 @@ function dayNumber(value: unknown): number | null {
   if (typeof value !== 'string') return null;
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) return null;
-  const day = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / DAY_MS;
-  return Number.isFinite(day) ? day : null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const date = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, date));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== date
+  ) return null;
+  return parsed.getTime() / DAY_MS;
 }
 
 function numeric(record: Record<string, unknown>, ...keys: string[]): number | null {
@@ -38,9 +46,9 @@ function numeric(record: Record<string, unknown>, ...keys: string[]): number | n
   return null;
 }
 
-function formatDate(day: number): string {
-  const date = new Date(day * DAY_MS);
-  return `${date.getUTCMonth() + 1}月${date.getUTCDate()}日`;
+function formatDate(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return match ? `${Number(match[2])}月${Number(match[3])}日` : value;
 }
 
 function formatValue(value: number): string {
@@ -93,7 +101,8 @@ export default function ValuationRangeChart({
       return { date, day, neutral, optimistic, conservative };
     })
     .filter((point): point is ChartPoint => point !== null)
-    .sort((a, b) => a.day - b.day);
+    .sort((a, b) => a.day - b.day)
+    .slice(-30);
 
   if (!data || points.length === 0) {
     return (
@@ -103,55 +112,46 @@ export default function ValuationRangeChart({
     );
   }
 
-  const windowRecord = response.window && typeof response.window === 'object'
-    ? response.window as Record<string, unknown>
-    : {};
-  const declaredEnd = dayNumber(windowRecord.endDate ?? response.endDate);
-  const endDay = declaredEnd ?? points[points.length - 1].day;
-  const declaredStart = dayNumber(windowRecord.startDate ?? response.startDate);
-  const startDay = declaredStart !== null && declaredStart < endDay
-    ? declaredStart
-    : endDay - 29;
-  const visiblePoints = points.filter(point => point.day >= startDay && point.day <= endDay);
   const sigmaSampleCount = numeric(response, 'sigmaSampleCount', 'sampleCount') ?? 0;
   const hasSigma = sigmaSampleCount >= 2;
-
-  const plottedValues = visiblePoints.flatMap(point => hasSigma
+  const plottedValues = points.flatMap(point => hasSigma
     ? [point.neutral, point.optimistic, point.conservative]
     : [point.neutral]);
   const rawMin = Math.min(...plottedValues);
   const rawMax = Math.max(...plottedValues);
-  const padding = Math.max((rawMax - rawMin) * 0.12, Math.abs(rawMax) * 0.015, 0.5);
+  const padding = Math.max((rawMax - rawMin) * 0.12, Math.abs(rawMax) * 0.015, 0.01);
   const yMin = rawMin - padding;
   const yMax = rawMax + padding;
 
-  const x = (day: number) => MARGIN.left + ((day - startDay) / Math.max(endDay - startDay, 1)) * PLOT_WIDTH;
-  const y = (value: number) => MARGIN.top + ((yMax - value) / Math.max(yMax - yMin, 1)) * PLOT_HEIGHT;
-
-  const segments: ChartPoint[][] = [];
-  for (const point of visiblePoints) {
-    const current = segments[segments.length - 1];
-    if (!current || point.day - current[current.length - 1].day > 1) segments.push([point]);
-    else current.push(point);
-  }
-
-  const linePath = (segment: ChartPoint[], key: 'neutral' | 'optimistic' | 'conservative') =>
-    segment.map((point, index) => `${index === 0 ? 'M' : 'L'} ${x(point.day).toFixed(2)} ${y(point[key]).toFixed(2)}`).join(' ');
-  const bandPath = (segment: ChartPoint[]) => {
-    const upper = segment.map((point, index) => `${index === 0 ? 'M' : 'L'} ${x(point.day).toFixed(2)} ${y(point.optimistic).toFixed(2)}`);
-    const lower = [...segment].reverse().map(point => `L ${x(point.day).toFixed(2)} ${y(point.conservative).toFixed(2)}`);
+  const x = (index: number) => points.length === 1
+    ? MARGIN.left + PLOT_WIDTH / 2
+    : MARGIN.left + (index / (points.length - 1)) * PLOT_WIDTH;
+  const y = (value: number) => MARGIN.top + ((yMax - value) / Math.max(yMax - yMin, 1e-10)) * PLOT_HEIGHT;
+  const linePath = (key: 'neutral' | 'optimistic' | 'conservative') =>
+    points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${x(index).toFixed(2)} ${y(point[key]).toFixed(2)}`).join(' ');
+  const bandPath = () => {
+    const upper = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${x(index).toFixed(2)} ${y(point.optimistic).toFixed(2)}`);
+    const lower = [...points].reverse().map((point, reverseIndex) => {
+      const index = points.length - 1 - reverseIndex;
+      return `L ${x(index).toFixed(2)} ${y(point.conservative).toFixed(2)}`;
+    });
     return [...upper, ...lower, 'Z'].join(' ');
   };
 
   const yTicks = Array.from({ length: 5 }, (_, index) => yMin + ((yMax - yMin) * index) / 4);
-  const xTicks = Array.from({ length: 5 }, (_, index) => Math.round(startDay + ((endDay - startDay) * index) / 4));
+  const xTickCount = Math.min(5, points.length);
+  const xTickIndexes: number[] = Array.from(new Set(
+    Array.from({ length: xTickCount }, (_, index) =>
+      xTickCount === 1 ? 0 : Math.round((index * (points.length - 1)) / (xTickCount - 1))
+    )
+  ));
 
   return (
     <section className="w-full overflow-hidden rounded-lg border border-gray-200 bg-white">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 px-4 py-3">
         <div>
-          <h3 className="text-sm font-semibold text-gray-800">近30个自然日估值区间</h3>
-          <p className="mt-0.5 text-xs text-gray-400">按自然日间距展示，缺失日期不连线</p>
+          <h3 className="text-sm font-semibold text-gray-800">近30个交易日估值区间</h3>
+          <p className="mt-0.5 text-xs text-gray-400">按有效估值交易日等距展示</p>
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600" aria-label="图例">
           <span className="flex items-center gap-1.5"><i className="h-0.5 w-4 bg-[#52749b]" />中性估值</span>
@@ -168,8 +168,8 @@ export default function ValuationRangeChart({
           aria-labelledby={`${titleId} ${descriptionId}`}
           preserveAspectRatio="xMidYMid meet"
         >
-          <title id={titleId}>近30个自然日中性估值及乐观、保守估值区间</title>
-          <desc id={descriptionId}>横轴为自然日期，纵轴为参考估值；缺失自然日处的曲线与区间带断开。</desc>
+          <title id={titleId}>近30个交易日中性估值及乐观、保守估值区间</title>
+          <desc id={descriptionId}>横轴按存在已生效估值数据的交易日等距排列，纵轴为参考估值。</desc>
           <rect x={MARGIN.left} y={MARGIN.top} width={PLOT_WIDTH} height={PLOT_HEIGHT} fill="#fbfcfd" />
 
           {yTicks.map(value => (
@@ -180,11 +180,11 @@ export default function ValuationRangeChart({
               </text>
             </g>
           ))}
-          {xTicks.map(day => (
-            <g key={`x-${day}`}>
-              <line x1={x(day)} x2={x(day)} y1={MARGIN.top} y2={HEIGHT - MARGIN.bottom} stroke="#f0f2f4" strokeWidth="1" />
-              <text x={x(day)} y={HEIGHT - MARGIN.bottom + 24} textAnchor="middle" fill="#7b8794" fontSize="11">
-                {formatDate(day)}
+          {xTickIndexes.map(index => (
+            <g key={`x-${points[index].date}`}>
+              <line x1={x(index)} x2={x(index)} y1={MARGIN.top} y2={HEIGHT - MARGIN.bottom} stroke="#f0f2f4" strokeWidth="1" />
+              <text x={x(index)} y={HEIGHT - MARGIN.bottom + 24} textAnchor="middle" fill="#7b8794" fontSize="11">
+                {formatDate(points[index].date)}
               </text>
             </g>
           ))}
@@ -192,20 +192,16 @@ export default function ValuationRangeChart({
             参考估值
           </text>
 
-          {hasSigma && segments.map((segment, index) => (
-            <path key={`band-${index}`} d={bandPath(segment)} fill="#7891ad" fillOpacity="0.14" />
-          ))}
-          {hasSigma && segments.map((segment, index) => (
-            <g key={`bounds-${index}`}>
-              <path d={linePath(segment, 'optimistic')} fill="none" stroke="#7891ad" strokeWidth="1.5" strokeDasharray="6 5" />
-              <path d={linePath(segment, 'conservative')} fill="none" stroke="#9aa8b7" strokeWidth="1.5" strokeDasharray="6 5" />
-            </g>
-          ))}
-          {segments.map((segment, index) => (
-            <path key={`neutral-${index}`} d={linePath(segment, 'neutral')} fill="none" stroke="#52749b" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
-          ))}
-          {visiblePoints.map(point => (
-            <circle key={point.date} cx={x(point.day)} cy={y(point.neutral)} r="3" fill="#ffffff" stroke="#52749b" strokeWidth="2" />
+          {hasSigma && <path d={bandPath()} fill="#7891ad" fillOpacity="0.14" />}
+          {hasSigma && (
+            <>
+              <path d={linePath('optimistic')} fill="none" stroke="#7891ad" strokeWidth="1.5" strokeDasharray="6 5" />
+              <path d={linePath('conservative')} fill="none" stroke="#9aa8b7" strokeWidth="1.5" strokeDasharray="6 5" />
+            </>
+          )}
+          <path d={linePath('neutral')} fill="none" stroke="#52749b" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
+          {points.map((point, index) => (
+            <circle key={point.date} cx={x(index)} cy={y(point.neutral)} r="3" fill="#ffffff" stroke="#52749b" strokeWidth="2" />
           ))}
         </svg>
       </div>
@@ -216,7 +212,7 @@ export default function ValuationRangeChart({
         </p>
       )}
       <p className="border-t border-gray-100 px-4 py-3 text-xs leading-5 text-gray-500">
-        方法说明：区间反映历史参考估值收益率的 Sigma 离散程度；模型估值误差约为 ±5%，两者含义不同。
+        方法说明：交易日以存在已生效估值数据的日期为准；区间反映相邻交易日历史参考估值收益率的 Sigma 离散程度。模型估值误差约为 ±5%，两者含义不同。
       </p>
     </section>
   );

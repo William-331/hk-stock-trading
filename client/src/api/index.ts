@@ -51,7 +51,8 @@ export interface ValuationRangePoint {
 export interface ValuationRangeResponse {
   window: {
     timeZone: string;
-    naturalDays: number;
+    tradingDays: number;
+    returnedTradingDays: number;
     startDate: string | null;
     endDate: string | null;
   };

@@ -11,6 +11,7 @@ interface PriceData {
   low: number;
   close: number;
   volume: number;
+  completedTransferQuantity: number;
   time_slot: string;
   change: number;
   changePct: number;
@@ -28,14 +29,6 @@ interface StockInfo {
 function fmt(v: number | undefined, decimals = 2): string {
   if (!v && v !== 0) return '-';
   return v.toFixed(decimals);
-}
-
-function fmtBigNum(v: number): string {
-  if (!v || v <= 0) return '-';
-  if (v >= 1e12) return (v / 1e12).toFixed(2) + '万亿';
-  if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿';
-  if (v >= 1e4) return (v / 1e4).toFixed(0) + '万';
-  return v.toFixed(0);
 }
 
 function chgCls(v: number) {
@@ -104,7 +97,7 @@ export default function Market() {
   const indicatorCards = [
     { label: '开盘参考估值', value: fmt(price?.open) },
     { label: '估值区间上沿', value: fmt(price?.high), cls: chgCls((price?.high || 0) - (price?.prevClose || 0)) },
-    { label: '转让完成数', value: fmtBigNum(price?.volume || 0) },
+    { label: '累计转让数量', value: (price?.completedTransferQuantity ?? 0).toLocaleString('zh-CN') },
     { label: '估值变动', value: (isUp ? '+' : '') + fmt(price?.changePct) + '%', cls: priceCls },
     { label: '估值区间下沿', value: fmt(price?.low), cls: chgCls((price?.low || 0) - (price?.prevClose || 0)) },
     { label: '前次参考估值', value: fmt(price?.prevClose) },

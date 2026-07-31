@@ -13,6 +13,7 @@ const db = new Database(DB_PATH);
 // 开启 WAL 模式提升性能
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+db.pragma('busy_timeout = 5000');
 
 export function initDB() {
   db.exec(`
@@ -25,6 +26,7 @@ export function initDB() {
       role TEXT NOT NULL DEFAULT 'user',
       balance REAL NOT NULL DEFAULT 1000000,
       status TEXT NOT NULL DEFAULT 'active',
+      revision INTEGER NOT NULL DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -133,6 +135,10 @@ export function initDB() {
   if (!cols.some(c => c.name === 'password_plain')) {
     db.exec("ALTER TABLE users ADD COLUMN password_plain TEXT NOT NULL DEFAULT ''");
     console.log('🔧 已为 users 表新增 password_plain 列');
+  }
+  if (!cols.some(c => c.name === 'revision')) {
+    db.exec('ALTER TABLE users ADD COLUMN revision INTEGER NOT NULL DEFAULT 0');
+    console.log('🔧 已为 users 表新增 revision 列');
   }
 
   // 初始化默认设置

@@ -19,6 +19,7 @@ import marketRoutes from './routes/market';
 import hkDetailRoutes from './routes/hkdetail';
 import pricePlanRoutes, { triggerPricePlan } from './routes/pricePlan';
 import { requireAuth, requireAdmin } from './middleware/auth';
+import { getLatestEffectiveValuation } from './services/valuation';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -130,7 +131,7 @@ app.get('/api/admin/dashboard', requireAuth, requireAdmin, (_req, res) => {
 app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   const { search } = req.query;
   let query = `
-    SELECT u.id, u.username, u.password_plain, u.real_name, u.role, u.balance, u.status, u.created_at,
+    SELECT u.id, u.username, u.password_plain, u.real_name, u.role, u.balance, u.status, u.revision, u.created_at,
            COALESCE(p.quantity, 0) as position_qty, COALESCE(p.avg_cost, 0) as avg_cost
     FROM users u
     LEFT JOIN positions p ON p.user_id = u.id
@@ -145,21 +146,154 @@ app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   res.json(users);
 });
 
-app.put('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
-  const { role, status, balance, password, real_name } = req.body;
-  const userId = req.params.id;
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
+app.get('/api/admin/users/:id/edit-context', requireAuth, requireAdmin, (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isSafeInteger(userId) || userId <= 0) return res.status(400).json({ error: '用户ID无效' });
+
+  const user = db.prepare(
+    'SELECT id, username, real_name, role, balance, status, revision FROM users WHERE id = ?'
+  ).get(userId) as any;
   if (!user) return res.status(404).json({ error: '用户不存在' });
-  if (real_name !== undefined) db.prepare('UPDATE users SET real_name = ? WHERE id = ?').run(real_name, userId);
-  if (role !== undefined) db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, userId);
-  if (status !== undefined) db.prepare('UPDATE users SET status = ? WHERE id = ?').run(status, userId);
-  if (balance !== undefined) db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(balance, userId);
-  if (password) {
-    const hash = require('bcryptjs').hashSync(password, 10);
-    db.prepare('UPDATE users SET password_hash = ?, password_plain = ? WHERE id = ?').run(hash, password, userId);
+
+  const position = db.prepare(
+    'SELECT quantity, avg_cost FROM positions WHERE user_id = ?'
+  ).get(userId) as any;
+  const pending = db.prepare(`
+    SELECT COUNT(*) AS count,
+           COALESCE(SUM(CASE WHEN type = 'buy' THEN quantity * price ELSE 0 END), 0) AS buy_amount,
+           COALESCE(SUM(CASE WHEN type = 'sell' THEN quantity ELSE 0 END), 0) AS sell_quantity
+    FROM orders WHERE user_id = ? AND status = 'pending'
+  `).get(userId) as any;
+  const valuation = getLatestEffectiveValuation();
+
+  res.json({
+    user,
+    position: { quantity: position?.quantity || 0, avg_cost: position?.avg_cost || 0 },
+    valuation: valuation
+      ? { available: true, id: valuation.id, value: valuation.value, timeSlot: valuation.timeSlot }
+      : { available: false, id: null, value: null, timeSlot: null },
+    pending: {
+      count: Number(pending.count) || 0,
+      buyAmount: Number(pending.buy_amount) || 0,
+      sellQuantity: Number(pending.sell_quantity) || 0,
+    },
+  });
+});
+
+app.put('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isSafeInteger(userId) || userId <= 0) return res.status(400).json({ error: '用户ID无效' });
+
+  const { profile = {}, password, expectedRevision, financialAdjustment } = req.body || {};
+  const realName = profile.realName ?? req.body.real_name;
+  const role = profile.role ?? req.body.role;
+  const status = profile.status ?? req.body.status;
+
+  if (role !== undefined && !['user', 'admin'].includes(role)) return res.status(400).json({ error: '角色无效' });
+  if (status !== undefined && !['active', 'frozen'].includes(status)) return res.status(400).json({ error: '状态无效' });
+  if (realName !== undefined && typeof realName !== 'string') return res.status(400).json({ error: '姓名格式无效' });
+  if (password !== undefined && (typeof password !== 'string' || password.length < 4 || password.length > 128)) {
+    return res.status(400).json({ error: '新密码长度必须为4-128位' });
   }
-  logOperation(req.user!.id, req.user!.username, 'update_user', `修改用户#${userId}: ${JSON.stringify(req.body)}`);
-  res.json({ message: '更新成功' });
+
+  let adjustment: { amount: number; quantityOverride?: number } | null = null;
+  if (financialAdjustment !== undefined) {
+    const amount = Number(financialAdjustment.amount);
+    if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: '投入金额必须是非负有效数字' });
+    if (Math.round(amount * 100) !== amount * 100) return res.status(400).json({ error: '投入金额最多保留两位小数' });
+    adjustment = { amount: Math.round(amount * 100) / 100 };
+    if (financialAdjustment.quantityOverride !== undefined) {
+      const quantity = Number(financialAdjustment.quantityOverride);
+      if (!Number.isSafeInteger(quantity) || quantity < 0) return res.status(400).json({ error: '权证持有量必须是非负整数' });
+      adjustment.quantityOverride = quantity;
+    }
+  }
+
+  try {
+    const result = db.transaction(() => {
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
+      if (!user) throw new Error('USER_NOT_FOUND');
+      if (expectedRevision !== undefined && Number(expectedRevision) !== Number(user.revision || 0)) {
+        throw new Error('STALE_USER_VERSION');
+      }
+
+      const oldPosition = db.prepare('SELECT quantity, avg_cost FROM positions WHERE user_id = ?').get(userId) as any;
+      let finalBalance = Number(user.balance);
+      let finalQuantity = Number(oldPosition?.quantity || 0);
+      let finalAvgCost = Number(oldPosition?.avg_cost || 0);
+      let valuationUsed: ReturnType<typeof getLatestEffectiveValuation> = null;
+      let mode: 'unchanged' | 'automatic' | 'manual' = 'unchanged';
+
+      if (adjustment) {
+        valuationUsed = getLatestEffectiveValuation();
+        if (!valuationUsed) throw new Error('VALUATION_UNAVAILABLE');
+        mode = adjustment.quantityOverride === undefined ? 'automatic' : 'manual';
+        const maximumQuantity = Math.floor((adjustment.amount + 1e-9) / valuationUsed.value);
+        finalQuantity = adjustment.quantityOverride ?? maximumQuantity;
+        if (finalQuantity > maximumQuantity) throw new Error('QUANTITY_EXCEEDS_AMOUNT');
+        finalBalance = Math.round((adjustment.amount - finalQuantity * valuationUsed.value) * 100) / 100;
+        if (finalBalance < 0) throw new Error('QUANTITY_EXCEEDS_AMOUNT');
+        finalAvgCost = finalQuantity > 0 ? valuationUsed.value : 0;
+
+        const pending = db.prepare(`
+          SELECT COALESCE(SUM(CASE WHEN type = 'buy' THEN quantity * price ELSE 0 END), 0) AS buy_amount,
+                 COALESCE(SUM(CASE WHEN type = 'sell' THEN quantity ELSE 0 END), 0) AS sell_quantity
+          FROM orders WHERE user_id = ? AND status = 'pending'
+        `).get(userId) as any;
+        if (finalBalance + 1e-9 < Number(pending.buy_amount) || finalQuantity < Number(pending.sell_quantity)) {
+          throw new Error('PENDING_ORDERS_CONFLICT');
+        }
+      }
+
+      const nextRevision = Number(user.revision || 0) + 1;
+      db.prepare(`UPDATE users SET real_name = ?, role = ?, status = ?, balance = ?, revision = ? WHERE id = ?`)
+        .run(realName ?? user.real_name, role ?? user.role, status ?? user.status, finalBalance, nextRevision, userId);
+      if (password) {
+        const hash = require('bcryptjs').hashSync(password, 10);
+        db.prepare('UPDATE users SET password_hash = ?, password_plain = ? WHERE id = ?').run(hash, password, userId);
+      }
+      if (adjustment) {
+        db.prepare(`
+          INSERT INTO positions (user_id, quantity, avg_cost, updated_at)
+          VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(user_id) DO UPDATE SET quantity = excluded.quantity, avg_cost = excluded.avg_cost, updated_at = CURRENT_TIMESTAMP
+        `).run(userId, finalQuantity, finalAvgCost);
+      }
+
+      const detailParts = [
+        `修改用户#${userId}`,
+        `余额 ${Number(user.balance).toFixed(2)}→${finalBalance.toFixed(2)}`,
+        `持仓 ${Number(oldPosition?.quantity || 0)}→${finalQuantity}`,
+        `平均成本 ${Number(oldPosition?.avg_cost || 0).toFixed(2)}→${finalAvgCost.toFixed(2)}`,
+        `模式 ${mode}`,
+      ];
+      if (valuationUsed) detailParts.push(`估值 ${valuationUsed.value}@${valuationUsed.timeSlot}`);
+      if (password) detailParts.push('密码已重置');
+      logOperation(req.user!.id, req.user!.username, 'update_user', detailParts.join('；'));
+
+      return {
+        message: '更新成功',
+        user: { id: userId, balance: finalBalance, revision: nextRevision },
+        position: { quantity: finalQuantity, avgCost: finalAvgCost },
+        valuationUsed: valuationUsed
+          ? { id: valuationUsed.id, value: valuationUsed.value, timeSlot: valuationUsed.timeSlot }
+          : null,
+        mode,
+      };
+    })();
+    res.json(result);
+  } catch (error: any) {
+    const messages: Record<string, [number, string]> = {
+      USER_NOT_FOUND: [404, '用户不存在'],
+      STALE_USER_VERSION: [409, '用户资产已发生变化，请重新打开编辑窗口'],
+      VALUATION_UNAVAILABLE: [503, '暂无有效参考估值，不能调整投入金额或持仓'],
+      QUANTITY_EXCEEDS_AMOUNT: [400, '权证持有量超过当前投入金额可购买的数量'],
+      PENDING_ORDERS_CONFLICT: [409, '调整结果不足以覆盖待审意向，请先处理相关认购或转让申请'],
+    };
+    const mapped = messages[error.message];
+    if (mapped) return res.status(mapped[0]).json({ error: mapped[1], code: error.message });
+    res.status(500).json({ error: '更新失败' });
+  }
 });
 
 app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {

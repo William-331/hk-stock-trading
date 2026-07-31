@@ -12,44 +12,53 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
   if (!type || !['buy', 'sell'].includes(type)) {
     return res.status(400).json({ error: '类型必须是认购或申请转让' });
   }
-  if (!quantity || quantity <= 0 || !Number.isInteger(quantity)) {
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) {
     return res.status(400).json({ error: '数量必须是正整数' });
   }
-  if (!price || price <= 0) {
+  if (!Number.isFinite(price) || price <= 0) {
     return res.status(400).json({ error: '参考估值必须大于0' });
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
-  if (!user || user.status !== 'active') {
-    return res.status(403).json({ error: '账户不可用' });
-  }
+  try {
+    const result = db.transaction(() => {
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
+      if (!user || user.status !== 'active') throw new Error('ACCOUNT_UNAVAILABLE');
 
-  // 申请转让时检查权证持有量
-  if (type === 'sell') {
-    const pos = db.prepare('SELECT * FROM positions WHERE user_id = ?').get(userId) as any;
-    if (!pos || pos.quantity < quantity) {
-      return res.status(400).json({ error: `权证持有量不足，当前权证持有量 ${pos?.quantity || 0} 股` });
+      const reserved = db.prepare(`
+        SELECT COALESCE(SUM(CASE WHEN type = 'buy' THEN quantity * price ELSE 0 END), 0) AS buy_amount,
+               COALESCE(SUM(CASE WHEN type = 'sell' THEN quantity ELSE 0 END), 0) AS sell_quantity
+        FROM orders WHERE user_id = ? AND status = 'pending'
+      `).get(userId) as any;
+
+      if (type === 'sell') {
+        const pos = db.prepare('SELECT quantity FROM positions WHERE user_id = ?').get(userId) as any;
+        const availableQuantity = Number(pos?.quantity || 0) - Number(reserved.sell_quantity || 0);
+        if (availableQuantity < quantity) throw new Error(`POSITION_SHORT:${availableQuantity}`);
+      } else {
+        const totalAmount = quantity * price;
+        const availableBalance = Number(user.balance) - Number(reserved.buy_amount || 0);
+        if (availableBalance + 1e-9 < totalAmount) throw new Error(`BALANCE_SHORT:${availableBalance}:${totalAmount}`);
+      }
+
+      return db.prepare('INSERT INTO orders (user_id, type, quantity, price) VALUES (?, ?, ?, ?)')
+        .run(userId, type, quantity, price);
+    })();
+
+    const typeLabel = type === 'buy' ? '认购' : '申请转让';
+    logOperation(userId, req.user!.username, 'submit_order', `${typeLabel} ${quantity}股，参考估值 ${price}`);
+    res.json({ id: result.lastInsertRowid, message: '申请已提交，等待审核' });
+  } catch (error: any) {
+    if (error.message === 'ACCOUNT_UNAVAILABLE') return res.status(403).json({ error: '账户不可用' });
+    if (error.message.startsWith('POSITION_SHORT:')) {
+      const available = Number(error.message.split(':')[1]);
+      return res.status(400).json({ error: `可申请转让的权证持有量不足，扣除待审意向后可用 ${available} 股` });
     }
-  }
-
-  // 认购时检查余额
-  if (type === 'buy') {
-    const totalAmount = quantity * price;
-    if (user.balance < totalAmount) {
-      return res.status(400).json({
-        error: `余额不足，需要 ¥${totalAmount.toFixed(2)}，当前余额 ¥${user.balance.toFixed(2)}`,
-      });
+    if (error.message.startsWith('BALANCE_SHORT:')) {
+      const [, availableText, neededText] = error.message.split(':');
+      return res.status(400).json({ error: `可用余额不足，需要 ¥${Number(neededText).toFixed(2)}，扣除待审意向后可用 ¥${Number(availableText).toFixed(2)}` });
     }
+    return res.status(500).json({ error: '申请提交失败' });
   }
-
-  const result = db.prepare(
-    'INSERT INTO orders (user_id, type, quantity, price) VALUES (?, ?, ?, ?)'
-  ).run(userId, type, quantity, price);
-
-  const typeLabel = type === 'buy' ? '认购' : '申请转让';
-  logOperation(userId, req.user!.username, 'submit_order', `${typeLabel} ${quantity}股，参考估值 ${price}`);
-
-  res.json({ id: result.lastInsertRowid, message: '申请已提交，等待审核' });
 });
 
 // 我的申请列表

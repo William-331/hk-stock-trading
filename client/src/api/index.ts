@@ -111,7 +111,31 @@ export const getFunds = () => api.get('/account/funds');
 // Admin
 export const getDashboard = () => api.get('/admin/dashboard');
 export const getUsers = (params?: any) => api.get('/admin/users', { params });
-export const updateUser = (id: number, data: any) => api.put(`/admin/users/${id}`, data);
+export interface AdminUserEditContext {
+  user: {
+    id: number;
+    username: string;
+    real_name: string;
+    role: 'user' | 'admin';
+    balance: number;
+    status: 'active' | 'frozen';
+    revision: number;
+  };
+  position: { quantity: number; avg_cost: number };
+  valuation: { available: boolean; id: number | null; value: number | null; timeSlot: string | null };
+  pending: { count: number; buyAmount: number; sellQuantity: number };
+}
+
+export interface AdminUserUpdateRequest {
+  expectedRevision: number;
+  profile: { realName: string; role: 'user' | 'admin'; status: 'active' | 'frozen' };
+  password?: string;
+  financialAdjustment?: { amount: number; quantityOverride?: number };
+}
+
+export const getUserEditContext = (id: number) =>
+  api.get<AdminUserEditContext>(`/admin/users/${id}/edit-context`);
+export const updateUser = (id: number, data: AdminUserUpdateRequest) => api.put(`/admin/users/${id}`, data);
 export const addUser = (data: any) => api.post('/admin/users', data);
 export const batchGenerateUsers = (data: { count: number; balance?: number; prefix?: string; pwdLen?: number }) =>
   api.post('/admin/users/batch-generate', data);

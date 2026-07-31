@@ -1,46 +1,18 @@
 import { Router, Request, Response } from 'express';
 import db, { logOperation } from '../db';
 import { requireAuth, requireAdmin } from '../middleware/auth';
+import {
+  getLatestEffectiveValuation,
+  shanghaiNowSlot,
+  SLOT_GLOB,
+  VALID_SLOT_SQL,
+  VALUATION_TIME_ZONE,
+} from '../services/valuation';
 
 const router = Router();
 
-// 合法 time_slot 形如 "YYYY-MM-DD HH:MM"（GLOB 过滤掉历史脏数据）
-const SLOT_GLOB = '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]';
-
-// 交易时段过滤：只保留 09:00-12:00 与 13:00-16:10 的点（substr(time_slot,12,5)=HH:MM）
-// 排除早期种子数据里 16:13/17:03 这类非交易时段、时间不规整的点
-const TRADING_HOURS_SQL =
-  "((substr(time_slot,12,5) >= '09:00' AND substr(time_slot,12,5) <= '12:00') " +
-  "OR (substr(time_slot,12,5) >= '13:00' AND substr(time_slot,12,5) <= '16:10'))";
-
-// 行情读取统一过滤：格式合法 + 交易时段内 + 不晚于当前时间（绝不显示未来计划走势）
-const VALID_SLOT_SQL = `time_slot GLOB ? AND ${TRADING_HOURS_SQL} AND time_slot <= ?`;
-
-// 当前北京时间格式化为 "YYYY-MM-DD HH:MM"，用于严格按时间截断（不显示未来计划点）
-function nowSlot(): string {
-  const n = new Date();
-  const pad = (x: number) => String(x).padStart(2, '0');
-  return `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())} ${pad(n.getHours())}:${pad(n.getMinutes())}`;
-}
-
-const VALUATION_TIME_ZONE = 'Asia/Shanghai';
 const VALUATION_WINDOW_TRADING_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-function shanghaiNowSlot(): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: VALUATION_TIME_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date());
-  const value = (type: string) =>
-    parts.find(part => part.type === type)?.value || '';
-  return `${value('year')}-${value('month')}-${value('day')} ${value('hour')}:${value('minute')}`;
-}
 
 function parseValidSlot(slot: unknown): { date: string; dayNumber: number } | null {
   if (typeof slot !== 'string') return null;
@@ -77,7 +49,7 @@ router.get('/kline', (req: Request, res: Response) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 1000, 1), 5000);
   const prices = db.prepare(
     `SELECT open, high, low, close, volume, time_slot, created_at FROM stock_prices WHERE ${VALID_SLOT_SQL} ORDER BY time_slot ASC LIMIT ?`
-  ).all(SLOT_GLOB, nowSlot(), limit);
+  ).all(SLOT_GLOB, shanghaiNowSlot(), limit);
   res.json(prices);
 });
 
@@ -141,7 +113,8 @@ router.get('/valuation-range', (_req: Request, res: Response) => {
 
 // 获取最新价格
 router.get('/latest', (_req: Request, res: Response) => {
-  const now = nowSlot();
+  const now = shanghaiNowSlot();
+  const effectiveValuation = getLatestEffectiveValuation(now);
   const completedTransferQuantity = Number((db.prepare(
     "SELECT COALESCE(SUM(quantity), 0) AS quantity FROM trade_records WHERE type = 'sell'"
   ).get() as { quantity: number }).quantity) || 0;
@@ -149,14 +122,23 @@ router.get('/latest', (_req: Request, res: Response) => {
     `SELECT open, high, low, close, volume, time_slot FROM stock_prices WHERE ${VALID_SLOT_SQL} ORDER BY time_slot DESC, id DESC LIMIT 1`
   ).get(SLOT_GLOB, now) as any;
 
-  if (!latest) {
+  if (!latest || !effectiveValuation) {
     return res.json({
-      open: 10.0,
-      high: 10.0,
-      low: 10.0,
-      close: 10.0,
+      available: false,
+      open: null,
+      high: null,
+      low: null,
+      close: null,
       volume: 0,
+      time_slot: null,
+      change: 0,
+      changePct: 0,
+      bid: null,
+      ask: null,
+      prevClose: null,
       completedTransferQuantity,
+      buyLevels: [],
+      sellLevels: [],
     });
   }
 
@@ -182,6 +164,7 @@ router.get('/latest', (_req: Request, res: Response) => {
   const ask = sellLevels[0]?.price || latest.close;
 
   res.json({
+    available: true,
     ...latest,
     change: Math.round(change * 100) / 100,
     changePct: Math.round(changePct * 100) / 100,

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { getUsers, updateUser, addUser, deleteUser, batchGenerateUsers, exportUsers } from '../../api';
+import { getUsers, getUserEditContext, updateUser, addUser, deleteUser, batchGenerateUsers, exportUsers } from '../../api';
+import type { AdminUserEditContext } from '../../api';
 
 export default function UserManage() {
   const [users, setUsers] = useState<any[]>([]);
@@ -10,7 +11,14 @@ export default function UserManage() {
 
   // 编辑弹窗
   const [editUser, setEditUser] = useState<any>(null);
+  const [editContext, setEditContext] = useState<AdminUserEditContext | null>(null);
   const [editPwd, setEditPwd] = useState('');
+  const [amountInput, setAmountInput] = useState('');
+  const [quantityInput, setQuantityInput] = useState('');
+  const [quantityDirty, setQuantityDirty] = useState(false);
+  const [financialDirty, setFinancialDirty] = useState(false);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
 
   // 新增弹窗
   const [showAdd, setShowAdd] = useState(false);
@@ -41,21 +49,76 @@ export default function UserManage() {
 
   const showMsg = (text: string) => { setMsg(text); setTimeout(() => setMsg(''), 2000); };
 
-  const handleEdit = (user: any) => { setEditUser(user); setEditPwd(''); };
+  const handleEdit = async (user: any) => {
+    setEditUser({ ...user });
+    setEditContext(null);
+    setEditPwd('');
+    setEditLoading(true);
+    setFinancialDirty(false);
+    setQuantityDirty(false);
+    try {
+      const res = await getUserEditContext(user.id);
+      const context = res.data;
+      setEditContext(context);
+      setEditUser({ ...user, ...context.user });
+      const valuation = context.valuation.value;
+      const currentAssetAmount = valuation
+        ? context.user.balance + context.position.quantity * valuation
+        : context.user.balance;
+      setAmountInput(currentAssetAmount.toFixed(2));
+      setQuantityInput(String(context.position.quantity));
+    } catch (err: any) {
+      showMsg(err.response?.data?.error || '用户资产信息加载失败');
+      setEditUser(null);
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  const valuationValue = editContext?.valuation.value ?? null;
+  const parsedAmount = Number(amountInput);
+  const autoQuantity = valuationValue && Number.isFinite(parsedAmount) && parsedAmount >= 0
+    ? Math.floor((parsedAmount + 1e-9) / valuationValue)
+    : 0;
+  const previewQuantity = quantityDirty ? Number(quantityInput) : autoQuantity;
+  const previewBalance = valuationValue && Number.isSafeInteger(previewQuantity) && previewQuantity >= 0
+    ? Math.round((parsedAmount - previewQuantity * valuationValue) * 100) / 100
+    : NaN;
 
   const handleSaveEdit = async () => {
+    if (!editUser || !editContext) return;
+    setEditSaving(true);
     try {
-      await updateUser(editUser.id, {
-        real_name: editUser.real_name,
-        role: editUser.role,
-        status: editUser.status,
-        balance: editUser.balance,
+      const payload: Parameters<typeof updateUser>[1] = {
+        expectedRevision: editContext.user.revision,
+        profile: {
+          realName: editUser.real_name || '',
+          role: editUser.role,
+          status: editUser.status,
+        },
         ...(editPwd ? { password: editPwd } : {}),
-      });
+      };
+      if (financialDirty) {
+        if (!editContext.valuation.available) throw new Error('暂无有效参考估值，不能调整资产');
+        if (!Number.isFinite(parsedAmount) || parsedAmount < 0) throw new Error('请输入有效的非负投入金额');
+        if (quantityDirty && (!Number.isSafeInteger(Number(quantityInput)) || Number(quantityInput) < 0)) {
+          throw new Error('权证持有量必须是非负整数');
+        }
+        payload.financialAdjustment = {
+          amount: parsedAmount,
+          ...(quantityDirty ? { quantityOverride: Number(quantityInput) } : {}),
+        };
+      }
+      await updateUser(editUser.id, payload);
       setEditUser(null);
+      setEditContext(null);
       showMsg('已更新');
       loadUsers();
-    } catch (err: any) { showMsg(err.response?.data?.error || '更新失败'); }
+    } catch (err: any) {
+      showMsg(err.response?.data?.error || err.message || '更新失败');
+    } finally {
+      setEditSaving(false);
+    }
   };
 
   const handleDelete = async (user: any) => {
@@ -192,7 +255,7 @@ export default function UserManage() {
           <div className="hidden sm:grid grid-cols-[1.6fr_1.4fr_1.3fr_0.8fr_1.1fr] gap-2 px-4 py-2.5 bg-gray-50 border-b border-gray-100 text-[11px] font-medium text-gray-400 uppercase tracking-wide">
             <span>用户</span>
             <span>密码</span>
-            <span>资金</span>
+            <span>现金余额</span>
             <span>权证持有量</span>
             <span className="text-right">操作</span>
           </div>
@@ -237,8 +300,11 @@ export default function UserManage() {
       {/* 编辑弹窗 */}
       {editUser && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" onClick={() => setEditUser(null)}>
-          <div className="bg-white rounded-2xl p-5 mx-4 w-full max-w-sm shadow-xl" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl p-5 mx-4 w-full max-w-md max-h-[90vh] overflow-y-auto shadow-xl" onClick={e => e.stopPropagation()}>
             <h2 className="text-lg font-bold mb-4">编辑用户</h2>
+            {editLoading || !editContext ? (
+              <div className="py-12 text-center text-sm text-gray-400">资产信息加载中...</div>
+            ) : (
             <div className="space-y-3">
               <div>
                 <label className="text-xs text-gray-500">用户名</label>
@@ -257,12 +323,52 @@ export default function UserManage() {
                   placeholder={editUser.password_plain ? `当前: ${editUser.password_plain}` : '输入新密码'}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-gray-500">余额</label>
-                  <input type="number" value={editUser.balance} onChange={e => setEditUser({ ...editUser, balance: Number(e.target.value) })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
+              <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-medium text-blue-800">资产调整</div>
+                    <div className="text-[10px] text-blue-600">
+                      {editContext.valuation.available
+                        ? `最新有效估值 ¥${valuationValue?.toFixed(2)} · ${editContext.valuation.timeSlot}`
+                        : '暂无有效参考估值，当前不能调整资产'}
+                    </div>
+                  </div>
+                  {quantityDirty && (
+                    <button type="button" onClick={() => { setQuantityDirty(false); setQuantityInput(String(autoQuantity)); }}
+                      className="text-[11px] text-blue-600 hover:text-blue-800">按金额重算</button>
+                  )}
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-gray-500">投入金额</label>
+                    <input type="number" min="0" step="0.01" value={amountInput}
+                      disabled={!editContext.valuation.available}
+                      onChange={e => { setAmountInput(e.target.value); setFinancialDirty(true); }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">权证持有量</label>
+                    <input type="number" min="0" step="1" value={quantityDirty ? quantityInput : autoQuantity}
+                      disabled={!editContext.valuation.available}
+                      onChange={e => { setQuantityInput(e.target.value); setQuantityDirty(true); setFinancialDirty(true); }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
+                  </div>
+                </div>
+                {editContext.valuation.available && (
+                  <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-600">
+                    <div>计算方式：{quantityDirty ? '手动持仓' : '金额自动换算'}</div>
+                    <div>预计现金余额：{Number.isFinite(previewBalance) && previewBalance >= 0 ? `¥${previewBalance.toFixed(2)}` : '持仓超过可购买数量'}</div>
+                    <div>预计平均成本：{previewQuantity > 0 ? `¥${valuationValue?.toFixed(2)}` : '¥0.00'}</div>
+                    <div>当前：现金 ¥{editContext.user.balance.toFixed(2)} / {editContext.position.quantity}股</div>
+                  </div>
+                )}
+                {editContext.pending.count > 0 && (
+                  <p className="text-[11px] leading-4 text-amber-700">
+                    该用户有 {editContext.pending.count} 笔待审意向，需保留认购资金 ¥{editContext.pending.buyAmount.toFixed(2)} 和转让持仓 {editContext.pending.sellQuantity} 股。
+                  </p>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-gray-500">角色</label>
                   <select value={editUser.role} onChange={e => setEditUser({ ...editUser, role: e.target.value })}
@@ -282,9 +388,13 @@ export default function UserManage() {
               </div>
               <div className="flex gap-2 pt-2">
                 <button onClick={() => setEditUser(null)} className="flex-1 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50">取消</button>
-                <button onClick={handleSaveEdit} className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm">保存</button>
+                <button onClick={handleSaveEdit} disabled={editSaving || (financialDirty && (!editContext.valuation.available || !Number.isFinite(previewBalance) || previewBalance < 0))}
+                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm disabled:opacity-50">
+                  {editSaving ? '保存中...' : '保存'}
+                </button>
               </div>
             </div>
+            )}
           </div>
         </div>
       )}

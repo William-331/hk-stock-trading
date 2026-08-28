@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getValuationRange, setDailyPlan, getPricePlan, adjustPriceSmooth, dailySummary, getLatestPrice, getStockInfo, rebuildPriceRange } from '../../api';
-import type { ValuationRangeResponse } from '../../api';
-import ValuationRangeChart from '../../components/ValuationRangeChart';
+import { getKline, setDailyPlan, getPricePlan, adjustPriceSmooth, dailySummary, getLatestPrice, getStockInfo, rebuildPriceRange } from '../../api';
+import KlineChart from '../../components/KlineChart';
 import { ValuationNoticeBanner } from '../../components/compliance';
 
 // 本地日期格式化为 YYYY-MM-DD（不要用 toISOString，那是 UTC 会在东八区凌晨偏成前一天）
@@ -47,12 +46,13 @@ interface RebuildSummary {
 type RebuildPhase = 'confirm' | 'submitting' | 'success' | 'error';
 
 export default function PriceManage() {
-  const [valuationRange, setValuationRange] = useState<ValuationRangeResponse | null>(null);
+  const [kline, setKline] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'daily' | 'batch'>('daily');
   const [msg, setMsg] = useState('');
   const [stockInfo, setStockInfo] = useState<any>({ code: '02110.HK', name: '天成控股' });
   const [latestPrice, setLatestPrice] = useState<any>(null);
+  const [planFuture, setPlanFuture] = useState<any[]>([]); // 未来待执行计划点（图上预览）
 
   // ---- 每日设定 ----
   const [dailyDate, setDailyDate] = useState(toLocalDate(new Date()));
@@ -86,20 +86,36 @@ export default function PriceManage() {
 
   useEffect(() => { loadData(); }, []);
 
+  // 当前时间格式化为 "YYYY-MM-DD HH:MM"（与 time_slot 一致），用于筛选未来计划点
+  const nowSlot = () => {
+    const n = new Date();
+    const pad = (x: number) => String(x).padStart(2, '0');
+    return `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())} ${pad(n.getHours())}:${pad(n.getMinutes())}`;
+  };
+
+  // 拉取「未来待执行」计划点，作为控价图上的预览虚线
+  const loadPlanFuture = () => {
+    getPricePlan({ from: nowSlot(), status: 'pending' })
+      .then(res => setPlanFuture(res.data || []))
+      .catch(() => setPlanFuture([]));
+  };
+
   const loadData = () => {
-    Promise.all([getValuationRange(), getLatestPrice(), getStockInfo()])
-      .then(([rangeRes, pRes, sRes]) => {
-        setValuationRange(rangeRes.data);
+    Promise.all([getKline(2000), getLatestPrice(), getStockInfo()])
+      .then(([kRes, pRes, sRes]) => {
+        setKline(kRes.data || []);
         setLatestPrice(pRes.data);
         if (sRes.data) setStockInfo(sRes.data);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
+    loadPlanFuture();
   };
 
-  const refreshValuationRange = () => {
-    getValuationRange().then(res => setValuationRange(res.data)).catch(console.error);
+  const loadKline = () => {
+    getKline(2000).then(res => setKline(res.data || [])).catch(console.error);
     getLatestPrice().then(res => setLatestPrice(res.data)).catch(() => {});
+    loadPlanFuture();
   };
 
   const showMsg = (text: string) => {
@@ -158,7 +174,7 @@ export default function PriceManage() {
         volUp: Number(dailyVolUp), volDown: Number(dailyVolDown),
       });
       showMsg((res.data as any).message);
-      refreshValuationRange();
+      loadKline();
     } catch (err: any) { showMsg(err.response?.data?.error || '设定失败'); }
   };
 
@@ -259,7 +275,7 @@ export default function PriceManage() {
       if (warnings.length) {
         setTimeout(() => showMsg(warnings[0]), 800);
       }
-      refreshValuationRange();
+      loadKline();
     } catch (err: any) {
       const errMsg = err.response?.data?.error || err.message || '历史重建失败';
       setRebuildError(errMsg);
@@ -310,7 +326,7 @@ export default function PriceManage() {
       setEditSlotId(null);
       const res = await getPricePlan({ date: editDay! });
       setEditDayPlans(res.data);
-      refreshValuationRange();
+      loadKline();
       showMsg(`已调整 ${plan.time_slot.slice(11)}，前后 ${smoothWindow} 点平滑过渡`);
     } catch (err: any) { showMsg(err.response?.data?.error || '更新失败'); }
   };
@@ -408,10 +424,14 @@ export default function PriceManage() {
 
       {msg && <div className="mb-3 px-3 py-2 bg-blue-100 text-blue-700 rounded-lg text-sm">{msg}</div>}
 
-      {/* ---- 估值区间图（整宽）---- */}
+      {/* ---- K 线图（整宽）---- */}
       <div className="mb-4">
-        <ValuationRangeChart data={valuationRange} loading={loading} />
-        <p className="mt-2 px-1 text-xs text-gray-500">待执行计划仅在生效后进入估值区间。</p>
+        {loading ? (
+          <div className="h-[400px] flex items-center justify-center rounded-lg border border-gray-200 bg-white text-sm text-gray-400">K 线数据加载中...</div>
+        ) : (
+          <KlineChart data={kline} planData={planFuture} />
+        )}
+        <p className="mt-2 px-1 text-xs text-gray-500">待执行计划以紫色虚线预览，到达设定时间后进入实际 K 线。</p>
       </div>
 
       {/* Tab */}

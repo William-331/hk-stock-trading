@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getLatestPrice, getStockInfo, getTrades, getValuationRange } from '../api';
-import type { ValuationRangeResponse } from '../api';
-import ValuationRangeChart from '../components/ValuationRangeChart';
+import { getKline, getLatestPrice, getStockInfo, getTrades } from '../api';
+import KlineChart from '../components/KlineChart';
 import { IntentActionNotice, ValuationNoticeBanner } from '../components/compliance';
 
 interface PriceData {
@@ -40,8 +39,7 @@ function chgCls(v: number) {
 export default function Market() {
   const navigate = useNavigate();
 
-  const [valuationRange, setValuationRange] = useState<ValuationRangeResponse | null>(null);
-  const [valuationRangeError, setValuationRangeError] = useState<string | null>(null);
+  const [kline, setKline] = useState<any[]>([]);
   const [price, setPrice] = useState<PriceData | null>(null);
   const [trades, setTrades] = useState<any[]>([]);
   const [stockInfo, setStockInfo] = useState<StockInfo>({ code: '02110.HK', name: '天成控股' });
@@ -52,15 +50,12 @@ export default function Market() {
   // Fetch initial data
   useEffect(() => {
     Promise.all([
-      getValuationRange()
-        .then(response => ({ data: response.data, error: null }))
-        .catch(() => ({ data: null, error: '估值区间加载失败' })),
+      getKline(),
       getLatestPrice(),
       getStockInfo(),
     ])
-      .then(([rangeResult, pRes, sRes]) => {
-        setValuationRange(rangeResult.data);
-        setValuationRangeError(rangeResult.error);
+      .then(([kRes, pRes, sRes]) => {
+        setKline(kRes.data || []);
         setPrice(pRes.data);
         if (sRes.data) setStockInfo(sRes.data);
       })
@@ -72,12 +67,7 @@ export default function Market() {
     // Poll every 30s
     const timer = setInterval(() => {
       getLatestPrice().then(pRes => setPrice(pRes.data)).catch(() => {});
-      getValuationRange()
-        .then(rangeRes => {
-          setValuationRange(rangeRes.data);
-          setValuationRangeError(null);
-        })
-        .catch(() => setValuationRangeError('估值区间刷新失败'));
+      getKline().then(kRes => setKline(kRes.data || [])).catch(() => {});
       getTrades().then(tRes => setTrades(tRes.data || [])).catch(() => {});
     }, 30000);
     return () => clearInterval(timer);
@@ -165,7 +155,7 @@ export default function Market() {
 
       {/* ===== 4. Chart ===== */}
       <div className="mx-2 mt-2">
-        <ValuationRangeChart data={valuationRange} loading={loading} error={valuationRangeError} />
+        <KlineChart data={kline} showIntraday={false} />
       </div>
 
       {/* ===== 5. Reference Estimate / Transfer Detail Tabs ===== */}

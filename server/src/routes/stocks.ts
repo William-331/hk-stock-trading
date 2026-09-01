@@ -48,7 +48,15 @@ function reasonablePrecision(value: number): number {
 router.get('/kline', (req: Request, res: Response) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 1000, 1), 5000);
   const prices = db.prepare(
-    `SELECT open, high, low, close, volume, time_slot, created_at FROM stock_prices WHERE ${VALID_SLOT_SQL} ORDER BY time_slot ASC LIMIT ?`
+    `SELECT open, high, low, close, volume, time_slot, created_at
+     FROM (
+       SELECT open, high, low, close, volume, time_slot, created_at
+       FROM stock_prices
+       WHERE ${VALID_SLOT_SQL}
+       ORDER BY time_slot DESC, id DESC
+       LIMIT ?
+     )
+     ORDER BY time_slot ASC`
   ).all(SLOT_GLOB, shanghaiNowSlot(), limit);
   res.json(prices);
 });

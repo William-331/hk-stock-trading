@@ -63,7 +63,7 @@ export default function MyPositions() {
             <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 space-y-3">
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">标的</span>
-                <span className="font-semibold text-gray-800">02110权证</span>
+                <span className="font-semibold text-gray-800">02110.HK</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">权证持有</span>
@@ -90,7 +90,7 @@ export default function MyPositions() {
                 <span className="text-sm text-gray-500">估值变动</span>
                 <span className={`font-bold text-lg ${profitColor}`}>
                   {position.profit >= 0 ? '+' : ''}¥{position.profit?.toFixed(2)}
-                  <span className="text-xs ml-1">({position.profit_pct?.toFixed(2)}%)</span>
+                  <span className="text-xs ml-1">({position.profit_pct >= 0 ? '+' : ''}{position.profit_pct?.toFixed(2)}%)</span>
                 </span>
               </div>
             </div>

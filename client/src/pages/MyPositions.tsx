@@ -33,7 +33,7 @@ export default function MyPositions() {
       <div className="max-w-lg mx-auto px-4 py-4">
         {/* 资金卡片 */}
         <div className="bg-gradient-to-r from-[#1a3a5c] to-[#1a5ce0] rounded-xl p-5 text-white mb-4 shadow-md">
-          <p className="text-sm text-blue-200">账户余额</p>
+          <p className="text-sm text-blue-200">最新估值</p>
           <p className="text-3xl font-bold mt-1 tracking-tight">¥{account?.balance?.toFixed(2) || '0.00'}</p>
           <div className="flex justify-between text-xs text-blue-200 mt-3">
             <span>{account?.real_name}</span>
@@ -63,22 +63,26 @@ export default function MyPositions() {
             <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 space-y-3">
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">标的</span>
-                <span className="font-semibold text-gray-800">02110 模拟标的</span>
+                <span className="font-semibold text-gray-800">02110权证</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-500">权证持有量</span>
-                <span className="font-bold text-gray-900">{position.quantity} 份</span>
+                <span className="text-gray-500">权证持有</span>
+                <span className="font-bold text-gray-900">{position.quantity} 股</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-500">持有参考估值</span>
+                <span className="text-gray-500">历史成本</span>
                 <span>¥{position.avg_cost?.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-500">最新参考估值</span>
+                <span className="text-gray-500">历史投入</span>
+                <span>¥{((position.avg_cost || 0) * (position.quantity || 0)).toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">最新价格</span>
                 <span>¥{position.current_price?.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-500">权证参考估值</span>
+                <span className="text-gray-500">最新估值</span>
                 <span className="font-semibold">¥{position.market_value?.toFixed(2)}</span>
               </div>
               <hr className="border-gray-100" />
@@ -115,7 +119,7 @@ export default function MyPositions() {
                     <span className="text-xs text-gray-400">{t.created_at}</span>
                   </div>
                   <div className="flex justify-between mt-2 text-sm text-gray-600">
-                    <span>{t.quantity} 份 · 参考估值 ¥{t.price?.toFixed(2)}</span>
+                    <span>{t.quantity} 股 · 参考估值 ¥{t.price?.toFixed(2)}</span>
                     <span className="font-bold text-gray-800">¥{t.amount?.toFixed(2)}</span>
                   </div>
                 </div>

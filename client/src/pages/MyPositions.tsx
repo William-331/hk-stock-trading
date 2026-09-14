@@ -34,7 +34,7 @@ export default function MyPositions() {
         {/* 资金卡片 */}
         <div className="bg-gradient-to-r from-[#1a3a5c] to-[#1a5ce0] rounded-xl p-5 text-white mb-4 shadow-md">
           <p className="text-sm text-blue-200">最新估值</p>
-          <p className="text-3xl font-bold mt-1 tracking-tight">¥{account?.balance?.toFixed(2) || '0.00'}</p>
+          <p className="text-3xl font-bold mt-1 tracking-tight">¥{position?.market_value?.toFixed(2) || '0.00'}</p>
           <div className="flex justify-between text-xs text-blue-200 mt-3">
             <span>{account?.real_name}</span>
             <span>{account?.username}</span>
